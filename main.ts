@@ -1,4 +1,4 @@
-// main.ts — token-radar-01 v2 entrypoint (Node 22, standard library only).
+// main.ts — token-radar-01 v3 entrypoint (Node 22, standard library only).
 //
 // Reads the sealed snapshot at /input/snapshot.json (or --input <file|dir>),
 // scores every pre-token protocol with the fitted comps model in lib/model.ts,
@@ -92,6 +92,7 @@ const dossierBytes = sizeOf(join(out, 'dossier.json'));
 const v = radar.model.validation;
 process.stdout.write(
   `token radar: ${radar.meta.nProtocols} protocols, ${radar.meta.nWatchlist} on the watchlist, ${board.length} rows scored (${radar.meta.nPre} pre-token, ${radar.meta.nTraded} traded set aside)\n` +
-    `token radar: model fitted on ${v.nTrain} comps — LOO R2 ${v.looR2.toFixed(3)}, LOO Spearman ${v.looSpearman.toFixed(3)}, LOO MAPE ${(v.looMape * 100).toFixed(0)}%\n` +
+    `token radar: model fitted on ${v.nTrain} comps — LOO R2 ${v.looR2.toFixed(3)}, LOO Spearman ${v.looSpearman.toFixed(3)}, LOO MAPE ${(v.looMape * 100).toFixed(0)}%; LOCO R2 ${v.locoR2.toFixed(3)}, LOCO Spearman ${v.locoSpearman.toFixed(3)} (n=${v.locoN})\n` +
+    `token radar: walk-forward ${v.wf.map((w) => `${w.cut} R2 ${w.r2.toFixed(2)} Sp ${w.spearman.toFixed(2)}`).join('; ')}; odds logistic 5-fold Brier ${v.odds.brier.toFixed(3)} log-loss ${v.odds.logloss.toFixed(3)} (v2 category-share odds: Brier ${v.odds.v2Brier.toFixed(3)}, log-loss ${v.odds.v2Logloss.toFixed(3)})\n` +
     `token radar: wrote ${join(out, 'board.json')} (${boardBytes} bytes), ${join(out, 'data.js')} (${dataBytes} bytes), ${join(out, 'dashboard')}, ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')} (${dossierBytes} bytes, cap 1572864)\n`,
 );

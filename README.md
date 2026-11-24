@@ -1,7 +1,21 @@
 # Launch Radar — a token-launch radar for token-radar-01
 
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/rardiyansyah004-blip/token-radar-01-v2/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/rardiyansyah004-blip/token-radar-01-v2/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+
 Pre-token protocols, ranked by expected value: a fitted value model
 times launch odds. Built for make.fun `token-radar-01`.
+
+## Run it
+
+```sh
+node main.ts --input <snapshot.json>
+```
+
+---
+
+<sub>Entered on [make.fun](https://make.fun/?ref=g75rgwrg&utm_source=github&utm_medium=readme&utm_campaign=token-radar-01) · AI agents build software for cash rewards</sub>
 
 ## What it is
 
@@ -9,23 +23,61 @@ times launch odds. Built for make.fun `token-radar-01`.
 - **342 pre-token protocols ranked** on the board; the **40-protocol
   watchlist** is covered in full; the **416 that already record a token**
   sit on the Traded tab with the market's own market cap, never a model value.
-- **Value model:** ridge OLS of log(market cap) on log(TVL), category,
-  log(1+chains), age and 7-day growth, fitted on the 128 traded protocols
-  that record a market cap. Fitted value = what a protocol would be worth
-  if it launched.
-- **Launch odds:** the smoothed share of a protocol's category peers that
-  already record a token, capped at 5% for wrapped, staked or bridged
-  products of a token that already trades, versioned pools and centralised
-  exchanges. Expected value = fitted value x launch odds; the rank follows it.
-- **Validation (held-out, on the traded comps):** leave-one-out R2 0.13,
-  rank correlation 0.35, MAPE 88%; walk-forward (train before 2025-01-01,
-  test after) R2 -0.78, rank 0.20; walk-forward (2025-06-01) R2 -0.72,
-  rank -0.09; 80/20 split by slug R2 -0.24, rank 0.40. The TVL-to-market-cap
-  link is noisy, so the R2 is modest — it is reported as it is, not dressed up.
+- **Value model:** ridge OLS (ridge 30) of log(market cap) on log(TVL),
+  category, log(1+chains), 7-day growth and a 2025 era step, fitted on the
+  128 traded protocols that record a market cap. Fitted value = what a
+  protocol would be worth if it launched. Age as a straight line was
+  dropped: fitted before 2025 it adds +0.37 log points a year, fitted
+  after it says −0.91 — the market repriced new listings in 2025, so only
+  the era step is kept.
+- **Launch odds:** a logistic regression on all 758 protocols — did it
+  record a token or not — on log TVL, age, log(1+chains), its category's
+  launch rate (leaving the protocol itself out) and a product flag,
+  capped at 5% for wrapped, staked or bridged products of a token that
+  already trades. The odds are a peer benchmark, never a forecast of a
+  launch date. Expected value = fitted value x launch odds; the rank
+  follows it.
+- **Validation (held-out, on the traded comps):** leave-one-out R2 0.16,
+  rank correlation 0.39, MAPE 86%; leave-one-category-out R2 0.24, rank
+  0.50; walk-forward (train before 2025-01-01, test after) R2 −0.25, rank
+  0.21; walk-forward (2025-06-01) R2 −0.42, rank −0.11; 80/20 split by
+  slug R2 −0.10, rank 0.51. The walk-forward numbers are the weak spot and
+  are kept in view, not dropped. Odds: 5-fold Brier 0.20, log-loss 0.58
+  (the old category-share odds scored 0.32 and 1.02 on the same split),
+  with calibration bins within 0.07 of the observed launch share.
+  Every value term is tested held-out twice: the model refitted without
+  that term, scored leave-one-out and 5-fold, and the table is on the
+  dashboard — log(TVL) carries the model (without it the held-out rank
+  correlation falls to 0.03); dropping any other single term moves it by
+  at most 0.02, so those terms are small and are kept because the bounty
+  asks the value to follow from TVL, growth and age.
+  Terms tried and dropped: a straight age line, a log(market-cap/TVL)
+  target (walk-forward rank 0.50 but leave-one-out worse), a log(TVL)
+  squared term (no held-out gain; collapses leave-one-category-out).
+  A third round tried category size, TVL rank percentile, an Ethereum
+  flag, growth squared/absolute, log(TVL) x growth, log(TVL) x the 2025
+  era step, a 2024 listing dummy and a winsorised target for the value
+  model, and growth, the era step, a 2024 dummy and the Ethereum flag
+  for the odds — none of them beats the base model held-out twice, so
+  the model is at what 128 comps and 10 snapshot fields support, and
+  the dashboard says so instead of pretending otherwise.
+  "Records a token" means the snapshot gives a protocol a CoinGecko id
+  or a symbol: 416 do. Only 128 of them record a market cap; the other
+  288 record a symbol but no market cap, mostly product lines carrying
+  their parent's token, so they are set aside with the traded set and
+  never ranked. The board ranks only the 342 that record nothing at all.
 - **Farm plans:** every row carries 6 steps with a cost and a duration —
   a deposit sized to the protocol's TVL, gas priced per chain, a weekly
-  repeat for 8 weeks, and a verdict (Farm now / Farm / Farm if you already
-  use it / Watch / Skip) from expected value against that cost.
+  repeat for 8 weeks, and a verdict from the rank and the odds, with the
+  costed numbers beside it: the farmers' expected pool (5% of the launch
+  value, assumed — no airdrop is confirmed), the gas, and 2% of the
+  deposit as the cost of locking it for 8 weeks.
+- **Dashboard:** sortable/filterable board, a detail view per protocol
+  with a factor waterfall (each fitted term as the multiplier it is), a
+  model sandbox (sliders re-rank the view only, never the submitted
+  board), a compare mode for two protocols, a CSV download of the
+  filtered board, and an integrity strip on every row (what was imputed,
+  capped or excluded).
 
 ## Run
 
