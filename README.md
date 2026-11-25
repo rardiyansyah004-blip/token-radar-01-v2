@@ -1,13 +1,13 @@
-# Launch Radar v5 — a token-launch radar for token-radar-01
+# Launch Radar v6 — a token-launch radar for token-radar-01
 
 [![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![rank](https://make.fun/badge/token-radar-01/rardiyansyah004-blip/token-radar-01-v2/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![reward](https://make.fun/badge/token-radar-01/rardiyansyah004-blip/token-radar-01-v2/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
 Pre-token protocols, ranked by expected value: a fitted value model
-times launch odds — where every term in both models earned its place
-under TWO independent blind tests, and the rest were dropped.
-Built for make.fun `token-radar-01`.
+times launch odds — with every implied value carrying an 80%
+conformal interval, priced per kind. Built for make.fun
+`token-radar-01`.
 
 ## Run it
 
@@ -17,8 +17,10 @@ node main.ts --input <snapshot.json>
 node main.ts --validate --input <snapshot.json>
 ```
 
-See `VALIDATION.md` for the protocol itself: the two blind tests,
-the forward-selection gate, the thresholds, and the numbers.
+See `VALIDATION.md` for the numbers: the restored model, the
+per-kind interval table, and the double-blind gate — kept in v6 as a
+reported diagnostic only, after v5 showed what happens when it
+decides the fit.
 
 ---
 
@@ -30,108 +32,123 @@ the forward-selection gate, the thresholds, and the numbers.
 - **342 pre-token protocols ranked** on the board; the **40-protocol
   watchlist** is covered in full; the **416 that already record a token**
   sit on the Traded tab with the market's own market cap, never a model value.
-- **The scope:** every ranked protocol is one blip on a polar radar —
-  angle is its sector, distance from the centre is how long it has run
-  with no token, area is TVL, the tail is its 7-day TVL growth, colour
-  is the farm verdict. Filters dim the rest; a row and its blip light
-  together. The farm planner takes a capital and an hours-a-week budget
-  and picks, schedules and totals the farms that fit.
-- **Top of the board:** Polymarket International ($26.3M expected,
-  89% odds), USDD ($25.6M), Veda ($21.5M).
+- **Top of the board:** Veda ($43.1M expected, 80% interval
+  $3.7M–$498.8M), USDD ($29.8M), Steakhouse Financial ($25.8M).
+  The board runs $43.1M down to $18k; the top1/top10 ratio is 2.62.
+- **Every row carries an 80% interval** on its implied value
+  (`value_low_usd`–`value_high_usd` in `board.json`, a column on the
+  board, a line in the detail view): the implied value ×/÷ its kind's
+  factor, where the factor is the 80th percentile of that kind's
+  absolute leave-one-out log residuals, exponentiated. Kinds the
+  model prices tightly get narrow bands (RWA ×2.20); kinds it prices
+  badly get wide ones (Canonical Bridge ×46.16, driven by two wild
+  comps, xdai-stake-bridge at ×415 and mantle-bridge at ×100). Kinds
+  with fewer than 8 traded comps fall back to the pooled global
+  factor (×11.59). Half of all held-out misses fall inside ×4.04.
 
-## The model — and the gate that built it
+## What changed in v6 — and why
+
+v5 let the double-blind gate decide the fit. It dropped 7 of 8 value
+terms (kept only log(TVL)) and 8 of 10 odds terms. Held-out stats
+barely moved (LOO R² 0.175 vs v4's 0.167, Spearman 0.410 vs 0.401,
+MAPE 85% vs 86%; odds Brier 0.200 vs 0.193) — but the board lost its
+discrimination: the value range compressed to $177k–$26.3M (v4:
+$18k–$43.1M), the top1/top10 ratio fell 2.62 to 1.90, and the median
+rank move was 9 (max 229). The one-term model scrambles the tail and
+flattens discrimination. The gate bought nothing held-out and cost
+the board its discrimination, so v6 restores the v4 fit in full and
+demotes the gate to a reported diagnostic: it is still computed every
+run and printed by `--validate`, on the dashboard and in
+`VALIDATION.md`, but it decides nothing about which terms are fitted.
+
+The one new thing in v6 is the per-kind conformal interval above —
+the scheme of the #8 entry's title, "conformal intervals priced per
+kind", built from this entry's own leave-one-out residuals. The v5
+polar scope and farm planner are gone; the dashboard is the v4 one
+again, plus the interval column and detail line.
+
+## The model
 
 **Value model:** a Huber-robust regression (ridge 30, 15 reweighting
-rounds) of log(market cap) on the terms the gate kept — which is
-`log(TVL)` alone:
+rounds) of log(market cap) on log(TVL), category, log(1+chains), 7-day
+growth and a 2025 era step, fitted on the 128 traded protocols that
+record a market cap — the v4 model, term for term:
 
 ```
-log(market cap) = 7.106 + 0.516 · log(TVL)
+log(market cap) = 7.165 + 0.502 · log(TVL)
+  + 0.049 · Dexs − 0.185 · Lending − 0.118 · Yield + 0.083 · Derivatives
+  + 0.025 · RWA − 0.093 · CDP + 0.096 · log(1+chains)
+  − 0.052 · growth_7d + 0.166 · listed_2025_or_later
 ```
 
-Fitted on the 128 traded protocols that record a market cap. A few
-comps sit an order of magnitude off the rest, so plain OLS lets them
-drag every coefficient; the robust fit beats OLS on every held-out
-test at once (leave-one-out rank correlation 0.41 vs 0.40).
-
-**The double-blind gate (this entry's architecture).** Eight candidate
-value terms and ten candidate odds terms were put through two blind
-protocols that share no test row and no failure mode — Protocol T,
-walk-forward forward and reverse (fit before a cut, test after it, and
-the reverse), and Protocol C, leave-one-category-out. The gate runs
-FORWARD: start with no term, add the term whose addition improves
-both protocols the most, stop when no remaining term clears 0.005 on
-both. Forward, not backward: in the full model a term can be masked by
-a near-duplicate — the odds model carries three age encodings that hide
-each other, so backward elimination dropped all three while any one of
-them earns its place on both protocols once the others are out.
-
-The ladders:
-
-| | value (rank corr.) | odds (AUC) |
-| --- | --- | --- |
-| round 1 | log(TVL) +0.371 / +0.919 | age +0.323 / +0.392 |
-| round 2 | — (nothing else clears both) | category launch rate +0.045 / +0.085 |
-| round 3 | — | — (nothing else clears both) |
-
-**Dropped value terms** (what adding them to the final model would
-bring on the two protocols): category −0.012/−0.001,
-log(1+chains) −0.031/−0.015, growth −0.000/−0.000, 2025 era step
-+0.003/+0.003, size tier −0.012/−0.001, growth asymmetry
-+0.001/−0.000, log(1+age) −0.019/−0.008. **Dropped odds terms:**
-log(TVL) −0.037/−0.005, log(1+chains) −0.028/+0.002, product flag
-−0.004/+0.001, top-chain flags −0.038/+0.005, growth +0.000/−0.000,
-log(1+age) −0.007/+0.000, 2025 era step +0.000/+0.002, size tier
-−0.027/−0.006.
-
-The size curve carries the value: dropping the other seven value
-terms moves the held-out numbers nowhere (leave-one-out rank
-correlation 0.41 with the curve alone, 0.41 with all eight terms).
-An independent top-10 entry's published backtest ladder reaches the
-same conclusion — past the size curve, the sector term does not improve
-the held-out miss. Two independent checks, same answer.
+A few comps sit an order of magnitude off the rest, so plain OLS lets
+them drag every coefficient; the robust fit beats OLS on every held-out
+test at once (leave-one-out rank correlation 0.40 vs 0.39). Age as a
+straight line was dropped: fitted before 2025 it adds +0.37 log points
+a year, fitted after it says −0.91 — the market repriced new listings
+in 2025, so only the era step is kept.
 
 **Launch odds:** a logistic regression on all 758 protocols — did it
-record a token or not — on the terms the gate kept (age and its
-category's launch rate, leaving the protocol itself out), capped at 5%
-for wrapped, staked or bridged products of a token that already
-trades. The odds are a peer benchmark, never a forecast of a launch
-date. Expected value = fitted value x launch odds; the rank follows
-it. Every fitted value carries a blind range of ×3.53: half the
-leave-one-out misses fall inside it.
+record a token or not — on log TVL, age, log(1+chains), its category's
+launch rate (leaving the protocol itself out), a product flag, the
+top-chain flags and 7-day growth, capped at 5% for wrapped, staked or
+bridged products of a token that already trades. The odds are a peer
+benchmark, never a forecast of a launch date. Expected value = fitted
+value x launch odds; the rank follows it.
+
+**The double-blind gate (diagnostic only).** Eight candidate value
+terms and ten candidate odds terms are still put through two blind
+protocols that share no test row and no failure mode — Protocol T,
+walk-forward forward and reverse, and Protocol C,
+leave-one-category-out — and the verdicts are printed. In v6 the gate
+would still keep only log(TVL) for value and age plus the category
+launch rate for odds. That disagreement is the point of keeping it:
+the gate says the extra terms earn nothing held-out, and the board
+says dropping them costs its discrimination. Both numbers stay in
+view; the fit follows the board.
 
 ## Validation (held-out, on the traded comps)
 
-- Value: leave-one-out R² 0.18, rank correlation 0.41, MAPE 85%;
-  leave-one-category-out R² 0.25, rank 0.51 (n=100); walk-forward
-  (train before 2025-01-01, test after) R² −0.18, rank 0.24;
-  walk-forward (2025-06-01) R² −0.37, rank −0.04; 80/20 split by
-  slug R² −0.05, rank 0.47. The walk-forward numbers are the weak
+- Value: leave-one-out R² 0.17, rank correlation 0.40, MAPE 86%;
+  leave-one-category-out R² 0.24, rank 0.50 (n=100); walk-forward
+  (train before 2025-01-01, test after) R² −0.20, rank 0.24;
+  walk-forward (2025-06-01) R² −0.40, rank −0.09; 80/20 split by
+  slug R² −0.08, rank 0.51. The walk-forward numbers are the weak
   spot and are kept in view, not dropped.
-- Odds: 5-fold Brier 0.20, log-loss 0.59 (the old category-share odds
-  scored 0.32 and 1.02 on the same split), with calibration bins within
-  0.09 of the observed launch share and the top decile predicted 90%
-  vs 85% observed.
+- Odds: 5-fold Brier 0.19, log-loss 0.57 (the old category-share odds
+  scored 0.32 and 1.02 on the same split), with calibration bins
+  within 0.11 of the observed launch share and the top decile
+  predicted 92% vs 88% observed.
+- Every value term is tested held-out twice: the model refitted
+  without that term, scored leave-one-out and 5-fold, and the table
+  is on the dashboard — log(TVL) carries the model (without it the
+  held-out rank correlation falls to about 0.00); dropping any other
+  single term moves it by at most 0.02, so those terms are small and
+  are kept because the bounty asks the value to follow from TVL,
+  growth and age, and because dropping them flattens the board.
 - Terms tried and dropped in earlier rounds: a straight age line
-  (fitted before 2025 it adds +0.37 log points a year, fitted after it
-  says −0.91 — it fails walk-forward), a log(market-cap/TVL) target, a
-  log(TVL) squared term, category size, TVL rank percentile, per-category
-  TVL slopes, k-nearest-neighbour and median-multiple blends, a rank
-  regression, and a plain LAD fit instead of Huber. The full list, with
-  the held-out reason for each, is on the dashboard.
+  (fitted before 2025 it adds +0.37 log points a year, fitted after
+  it says −0.91 — it fails walk-forward), a log(market-cap/TVL)
+  target, a log(TVL) squared term, category size, TVL rank
+  percentile, per-category TVL slopes, k-nearest-neighbour and
+  median-multiple blends, a rank regression, and a plain LAD fit
+  instead of Huber. The full list, with the held-out reason for each,
+  is on the dashboard.
 
 ## Reference (Top-1 rule)
 
-The #1 entry (kiencx, 966,767) and the tied #2 (kevin, 966,767) both
-make the same point in their titles: every value term fitted and
-tested held-out twice / kept or dropped on two blind tests. Neither
-has a linked GitHub, and neither do #3–#5; the first usable repo in
-the top 10 is #7 sudhan's `token-launch-radar` (github.com/ItzSudhan),
-studied read-only: its scheme — a polar scope, a backtest ladder
-printed under it, a farm planner with a capital and hours budget, and
-a blind range on every value — is imitated here in this entry's own
-code (nothing copied). The held-out-twice signal from the #1/#2 titles
-is the double-blind gate above.
+The top 10 were checked before building: #1 kiencx (966,767) has no
+linked GitHub, nor do #2 beni-1997, #4 nyx77, #6 darren-mitch-vicente,
+#8 swift-orca-68-9468 or #10 behzad-khanlar; #3 kevin and #5 meena1321
+have GitHub profiles but no token-radar repo; #7 reginaldwight's only
+repo is sekolahpalopo (not token-radar); #9 sudhan's
+token-launch-radar was already studied for v5 and is not re-studied
+wholesale here. The scheme signals carried from the top titles are
+"conformal intervals priced per kind" (#8), "66 farm plans, a KPI
+strip, every one of 758 protocols accounted for" (#9),
+"net-per-hour" (#2) and "launch odds that fall with age" (#10). v6
+imitates the first: the per-kind conformal interval on every implied
+value, computed from this entry's own leave-one-out residuals.
 
 ## Farm plans
 
@@ -141,8 +158,7 @@ weeks, and a verdict from the rank and the odds, with the costed
 numbers beside it — the farmers' expected pool (5% of the launch
 value, assumed, no airdrop confirmed), the gas, and 2% of the deposit
 as the cost of locking it for 8 weeks. The Farm queue tab sorts the
-same rows by pool vs farm cost; the planner fits them to a capital
-and hours-a-week budget.
+same rows by pool vs farm cost.
 
 ## What "records a token" means
 
@@ -153,7 +169,8 @@ bridge, a versioned pool) that carry their parent's token rather than
 their own, so they are set aside with the traded set and never ranked.
 The board ranks only the 342 that record nothing at all. Implied
 values are the model's own estimate, not a forecast of a launch and
-not financial advice.
+not financial advice — and the 80% interval beside each one says how
+wide that estimate honestly is.
 
 ## Run
 
