@@ -14,6 +14,18 @@
 .method table{border-collapse:collapse;margin-top:8px}.method td,.method th{border:1px solid var(--line);padding:5px 10px;font-size:12.5px;text-align:left}.method th{color:var(--mut);font-weight:600}
 .chart{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:14px 0}
 .chart h3{margin:0 0 8px;font-size:14px}
+.scope{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--blue);border-radius:10px;padding:14px 16px;margin:0 0 16px}
+.scope h2{margin:0 0 8px;font-size:16px}
+.scope svg{display:block;margin:0 auto;max-width:680px}
+.scope .blip{cursor:pointer}
+.scope .blip:hover{stroke:#fff;stroke-width:2}
+.planner{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--blue);border-radius:10px;padding:12px 14px;margin:0 0 12px}
+.planner h2{margin:0 0 4px;font-size:15px}
+.planner label{color:var(--mut);font-size:12px;margin-right:14px}
+.planner input{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px;width:110px}
+.planner table.board{margin-top:8px}
+.gate{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700}
+.gate.keep{background:#123324;color:var(--acc)}.gate.drop{background:#2c1a1a;color:var(--bad)}
 .picks{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc2);border-radius:10px;padding:14px 16px;margin:0 0 16px}
 .picks h2{margin:0 0 10px;font-size:16px}
 .pick-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
