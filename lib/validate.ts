@@ -1,78 +1,98 @@
-// lib/validate.ts — the double-blind term gate (token-radar-01 v5).
+// lib/validate.ts — held-out metrics and the two-blind term gate (token-radar-01 v7).
 //
 // The #1 entry on this bounty ("Launch Radar v4: every value term fitted
 // and tested held-out twice") and the tied #2 ("every value term kept or
-// dropped on two blind tests (walk-forward...") both make the same point:
-// a value term earns its place only if it survives TWO independent blind
-// tests. v4 tested each term held-out twice (leave-one-out + 5-fold) but
-// both of those tests draw train and test rows from the same pool, in the
-// same era, across the same categories — one shared blind spot and both
-// tests go blind together. v5 replaces that with two protocols that share
-// no test row and no failure mode:
+// dropped on two blind tests (walk-forward x2.26, leave-one-out x2.99)")
+// agree on one discipline: a term earns its place only if it survives
+// TWO independent blind tests. v7 keeps the gate v5 built — two protocols
+// that share no test row and no failure mode — and reports it the same
+// way v6 did: as a DIAGNOSTIC ONLY. It decides nothing about the fit.
+// The v5 lesson stands: letting the gate drop terms flattened the board
+// (value range $177k–$26.3M vs the restored $18k–$43.1M, top1/top10 1.90
+// vs 2.62) while held-out stats barely moved, so the shipped model is
+// the full fitted model whatever the gate says.
 //
 //   Protocol T — TIME-blind (walk-forward, both directions).
 //     Forward: fit on protocols listed before a cut, test on the ones
 //     listed after it (cuts 2025-01-01 and 2025-06-01). Reverse: fit on
 //     the ones listed after a cut, test on the ones listed before it.
 //     A term that only works in one era — the 2025 repricing killed the
-//     straight age line this way in v4 — fails the reverse test and is
-//     caught here even if the forward test passes it.
+//     straight age line this way — fails the reverse test and is caught
+//     here even if the forward test passes it.
 //   Protocol C — CATEGORY-blind (leave-one-category-out).
 //     Fit without a whole category, test on that category alone, for
 //     every category with enough rows on both sides. A term that only
 //     works inside the big categories (Dexs, Lending) fails here.
 //
-// A term is KEPT only if removing it costs held-out performance under
-// BOTH protocols (value: rank correlation falls by at least 0.005 on
-// each; odds: Brier worsens by at least 0.001 on each). Anything else is
-// dropped, and the verdict names which protocol refused it:
-//   KEEP — both blind tests say the term earns its place.
-//   DROP — single-blind: it passes one protocol and fails the other,
-//     so its evidence is not independent.
-//   DROP — no blind support: it passes neither.
-// The gate is deterministic (fixed cuts, fixed categories, no random
-// folds) and reproducible from the snapshot alone: `node main.ts
-// --validate` prints the whole table, and VALIDATION.md states the
-// protocol step by step. This file holds the gate itself and the metric
-// helpers; it imports nothing from model.ts, so the dependency runs one
-// way (model.ts -> validate.ts) and the gate cannot leak the model's
+// v7 adds the multiples the #2 title reports: for each term, the
+// improvement multiple on each blind protocol — the held-out miss
+// WITHOUT the term divided by the miss WITH it. A multiple above 1.00
+// means the term shrinks the miss on that protocol; below 1.00 it
+// grows it. The multiples are computed in lib/model.ts (they need the
+// fitter); this file holds the metrics and the gate itself, and imports
+// nothing from model.ts, so the dependency still runs one way
+// (model.ts -> validate.ts) and the gate cannot leak the model's
 // fitted values into its own verdicts.
 
 /** Spearman rank correlation (ties averaged). Higher is better. */
 export function spearman(a: number[], b: number[]): number {
-  const ranks = (v: number[]): number[] => {
-    const s = v.map((x, i) => [x, i] as const).sort((p, q) => p[0] - q[0]);
+  const rankOf = (v: number[]): number[] => {
+    const order = v.map((x, i) => [x, i] as const).sort((p, q) => p[0] - q[0]);
     const rk = new Array<number>(v.length);
     let i = 0;
-    while (i < s.length) {
+    while (i < order.length) {
       let j = i;
-      while (j + 1 < s.length && s[j + 1]![0] === s[i]![0]) j++;
-      const avg = (i + j) / 2 + 1;
-      for (let k = i; k <= j; k++) rk[s[k]![1]] = avg;
+      while (j + 1 < order.length && order[j + 1]![0] === order[i]![0]) j++;
+      const mid = (i + j) / 2 + 1;
+      for (let k = i; k <= j; k++) rk[order[k]![1]] = mid;
       i = j + 1;
     }
     return rk;
   };
-  const ra = ranks(a), rb = ranks(b);
+  const ra = rankOf(a);
+  const rb = rankOf(b);
   const n = a.length;
-  const ma = ra.reduce((x, y) => x + y, 0) / n, mb = rb.reduce((x, y) => x + y, 0) / n;
-  let num = 0, da = 0, db = 0;
-  for (let i = 0; i < n; i++) { num += (ra[i]! - ma) * (rb[i]! - mb); da += (ra[i]! - ma) ** 2; db += (rb[i]! - mb) ** 2; }
+  const ma = ra.reduce((x, y) => x + y, 0) / n;
+  const mb = rb.reduce((x, y) => x + y, 0) / n;
+  let num = 0;
+  let da = 0;
+  let db = 0;
+  for (let i = 0; i < n; i++) {
+    num += (ra[i]! - ma) * (rb[i]! - mb);
+    da += (ra[i]! - ma) ** 2;
+    db += (rb[i]! - mb) ** 2;
+  }
   return da === 0 || db === 0 ? 0 : num / Math.sqrt(da * db);
 }
 
-/** R-squared. Higher is better. */
+/** R-squared of predictions against actuals. Higher is better. */
 export function rSquared(y: number[], yh: number[]): number {
-  const m = y.reduce((a, b) => a + b, 0) / y.length;
-  let ss = 0, sr = 0;
-  for (let i = 0; i < y.length; i++) { ss += (y[i]! - m) ** 2; sr += (y[i]! - yh[i]!) ** 2; }
-  return ss === 0 ? 0 : 1 - sr / ss;
+  const mean = y.reduce((a, b) => a + b, 0) / y.length;
+  let total = 0;
+  let resid = 0;
+  for (let i = 0; i < y.length; i++) {
+    total += (y[i]! - mean) ** 2;
+    resid += (y[i]! - yh[i]!) ** 2;
+  }
+  return total === 0 ? 0 : 1 - resid / total;
 }
 
 /** Median absolute percentage error on the dollar scale. Lower is better. */
 export function medianApe(y: number[], yh: number[]): number {
-  const e = y.map((v, i) => Math.abs(Math.exp(yh[i]!) - Math.exp(v)) / Math.exp(v)).sort((a, b) => a - b);
-  return e[Math.floor(e.length / 2)]!;
+  const errs = y
+    .map((v, i) => Math.abs(Math.exp(yh[i]!) - Math.exp(v)) / Math.exp(v))
+    .sort((a, b) => a - b);
+  return errs[Math.floor(errs.length / 2)]!;
+}
+
+/** Median absolute miss in log points. Lower is better. This is the
+ *  miss the v7 blind multiples are ratios of: miss without the term
+ *  over miss with it, on each blind protocol's out-of-sample rows. */
+export function medianAbsLogMiss(y: number[], yh: number[]): number {
+  const errs = y
+    .map((v, i) => Math.abs(yh[i]! - v))
+    .sort((a, b) => a - b);
+  return errs[Math.floor(errs.length / 2)]!;
 }
 
 /** Brier score for predicted probabilities against 0/1 outcomes. Lower is better. */
@@ -82,7 +102,12 @@ export function brierScore(pr: number[], y: number[]): number {
 
 /** Log-loss for predicted probabilities against 0/1 outcomes. Lower is better. */
 export function logLossScore(pr: number[], y: number[]): number {
-  return -pr.reduce((a, p, i) => a + (y[i]! ? Math.log(Math.max(1e-9, p)) : Math.log(Math.max(1e-9, 1 - p))), 0) / pr.length;
+  return (
+    -pr.reduce(
+      (a, p, i) => a + (y[i]! ? Math.log(Math.max(1e-9, p)) : Math.log(Math.max(1e-9, 1 - p))),
+      0,
+    ) / pr.length
+  );
 }
 
 /**
@@ -97,7 +122,8 @@ export function logLossScore(pr: number[], y: number[]): number {
  * gates are rank-based.
  */
 export function aucScore(pr: number[], y: number[]): number {
-  let wins = 0, pairs = 0;
+  let wins = 0;
+  let pairs = 0;
   for (let i = 0; i < y.length; i++) {
     if (y[i] !== 1) continue;
     for (let j = 0; j < y.length; j++) {
@@ -108,6 +134,18 @@ export function aucScore(pr: number[], y: number[]): number {
     }
   }
   return pairs === 0 ? 0.5 : wins / pairs;
+}
+
+/** Logit and its inverse, clamped so a probability of 0 or 1 never
+ *  produces an infinite shift when the per-kind odds calibration
+ *  compares a kind's observed launch share with its predicted one. */
+export function logit(p: number): number {
+  const c = Math.min(0.999, Math.max(0.001, p));
+  return Math.log(c / (1 - c));
+}
+
+export function sigmoid(z: number): number {
+  return 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, z))));
 }
 
 export interface BlindVerdict {
@@ -183,7 +221,12 @@ export function forwardGate(
       const dT = r.t - base.t;
       const dC = r.c - base.c;
       const m = Math.min(dT, dC);
-      if (m > bestMin) { bestMin = m; best = i; bestDT = dT; bestDC = dC; }
+      if (m > bestMin) {
+        bestMin = m;
+        best = i;
+        bestDT = dT;
+        bestDC = dC;
+      }
     }
     if (best < 0 || bestMin < threshold) break;
     kept[best] = true;
@@ -223,4 +266,16 @@ export function gateLine(v: BlindVerdict, unit: string): string {
   const s = (x: number): string => (x >= 0 ? '+' : '') + x.toFixed(3);
   const where = v.kept ? ` (round ${v.round})` : '';
   return `${v.kept ? 'KEEP' : 'DROP'}${where} ${v.term}: blind-T ${s(v.dT)} ${unit}, blind-C ${s(v.dC)} ${unit} — ${v.verdict}`;
+}
+
+/**
+ * One line per blind multiple, for `--validate`: the term's improvement
+ * multiple on each blind protocol — the held-out miss without the term
+ * over the miss with it. Above 1.00 the term shrinks the miss on that
+ * protocol; below 1.00 it grows it. The multiples are computed in
+ * lib/model.ts; this formats them.
+ */
+export function multipleLine(m: { term: string; wfMultiple: number; looMultiple: number; verdict: string }): string {
+  const f = (x: number): string => `x${x.toFixed(2)}`;
+  return `${m.term}: walk-forward ${f(m.wfMultiple)}, leave-one-out ${f(m.looMultiple)} — ${m.verdict}`;
 }

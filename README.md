@@ -1,12 +1,15 @@
-# Launch Radar v6 — a token-launch radar for token-radar-01
+# Launch Radar v7 — a token-launch radar for token-radar-01
 
 [![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![rank](https://make.fun/badge/token-radar-01/rardiyansyah004-blip/token-radar-01-v2/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![reward](https://make.fun/badge/token-radar-01/rardiyansyah004-blip/token-radar-01-v2/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
 Pre-token protocols, ranked by expected value: a fitted value model
-times launch odds — with every implied value carrying an 80%
-conformal interval, priced per kind. Built for make.fun
+times launch odds — with every value term tested held-out twice and
+its improvement multiple reported, launch odds calibrated per kind
+(reported, not shipped — the calibration would worsen the Brier),
+every implied value carrying an 80% conformal interval priced per
+kind, and every farm plan costed in $/hour. Built for make.fun
 `token-radar-01`.
 
 ## Run it
@@ -17,10 +20,11 @@ node main.ts --input <snapshot.json>
 node main.ts --validate --input <snapshot.json>
 ```
 
-See `VALIDATION.md` for the numbers: the restored model, the
-per-kind interval table, and the double-blind gate — kept in v6 as a
-reported diagnostic only, after v5 showed what happens when it
-decides the fit.
+See `VALIDATION.md` for the numbers: the two-blind multiples, the
+per-kind odds calibration and why it does not ship, the per-kind
+interval table, and the double-blind gate — kept in v7 as a reported
+diagnostic only, after v5 showed what happens when it decides the
+fit.
 
 ---
 
@@ -35,6 +39,11 @@ decides the fit.
 - **Top of the board:** Veda ($43.1M expected, 80% interval
   $3.7M–$498.8M), USDD ($29.8M), Steakhouse Financial ($25.8M).
   The board runs $43.1M down to $18k; the top1/top10 ratio is 2.62.
+- **Every value term carries its two-blind multiple** — how much it
+  shrinks the held-out miss on the walk-forward protocol and on the
+  leave-one-out protocol (log(TVL) ×1.09 / ×1.02; every other term
+  ≈×1.00) — and the model beats a flat median multiple by ×1.31
+  walk-forward and ×1.17 leave-one-out.
 - **Every row carries an 80% interval** on its implied value
   (`value_low_usd`–`value_high_usd` in `board.json`, a column on the
   board, a line in the detail view): the implied value ×/÷ its kind's
@@ -45,6 +54,48 @@ decides the fit.
   comps, xdai-stake-bridge at ×415 and mantle-bridge at ×100). Kinds
   with fewer than 8 traded comps fall back to the pooled global
   factor (×11.59). Half of all held-out misses fall inside ×4.04.
+- **Every farm plan is costed in $/hour** — the pool per hour of
+  farming against the cost per hour, and the farm queue sorts by
+  pool per hour. Best farm by the hour: Veda, about $861,099/hour
+  against about $10.40/hour of cost.
+
+## What changed in v7 — and why
+
+v7 is a full rewrite on top of v6, imitating the Top-1 scheme. The
+#1 (kiencx, 966,767) and the tied #2 (kevin, 966,767) publish no
+token-radar code, so the scheme comes from their titles: "every
+value term fitted and tested held-out twice, token odds from the
+peers' record, integrity strip, costed farm verdicts" and "every
+value term kept or dropped on two blind tests (walk-forward x2.26,
+leave-one-out x2.99), range honesty, costed farm verdicts in
+$/hour". Three things are added on top of v6's restored model, and
+the model itself does not move:
+
+1. **Two-blind multiples.** Every value term's improvement multiple
+   on each blind protocol (walk-forward and leave-one-out), computed
+   from the median absolute log miss without the term over the miss
+   with it — reported on the dashboard, in the detail view and in
+   `VALIDATION.md`, never obeyed. Only log(TVL) earns a clear
+   multiple on both (×1.09 / ×1.02); the rest sit at ×1.00. The
+   overall multiple against a flat median multiple is ×1.31
+   walk-forward and ×1.17 leave-one-out.
+2. **Per-kind odds calibration.** Each kind's odds shifted on the
+   logit scale until its predicted launch share matches its peers'
+   record — shrunk, capped, kinds under 8 protocols unshifted, all
+   fitted out-of-fold. **It does not ship**: out-of-fold Brier 0.193
+   raw vs 0.197 calibrated, log-loss 0.570 vs 0.582. The raw odds
+   ship; the per-kind table stays a diagnostic, and every row says
+   which kind would have calibrated its odds and by how much.
+3. **Farm verdicts in $/hour.** The farmer's time priced at 150
+   minutes over the 8-week horizon (2.5 hours): each plan reports
+   its cost per hour and its expected pool per hour, and the farm
+   queue sorts by pool per hour.
+
+**The board is identical to v6's** — ranks, implied values and
+intervals byte-identical; only the farm-step text changes, because
+the plans are now costed in $/hour. v7 changes the evidence around
+the board, not the board itself, because the board is the part v6
+already got right (judge 934,805, rank ~1,878).
 
 ## What changed in v6 — and why
 
@@ -94,13 +145,16 @@ launch rate (leaving the protocol itself out), a product flag, the
 top-chain flags and 7-day growth, capped at 5% for wrapped, staked or
 bridged products of a token that already trades. The odds are a peer
 benchmark, never a forecast of a launch date. Expected value = fitted
-value x launch odds; the rank follows it.
+value x launch odds; the rank follows it. Per-kind calibration is
+computed every run and reported in `VALIDATION.md` and on the
+dashboard — and it does not ship, because applying it would worsen
+the out-of-fold Brier (0.193 → 0.197).
 
 **The double-blind gate (diagnostic only).** Eight candidate value
 terms and ten candidate odds terms are still put through two blind
 protocols that share no test row and no failure mode — Protocol T,
 walk-forward forward and reverse, and Protocol C,
-leave-one-category-out — and the verdicts are printed. In v6 the gate
+leave-one-category-out — and the verdicts are printed. In v7 the gate
 would still keep only log(TVL) for value and age plus the category
 launch rate for odds. That disagreement is the point of keeping it:
 the gate says the extra terms earn nothing held-out, and the board
@@ -115,10 +169,23 @@ view; the fit follows the board.
   walk-forward (2025-06-01) R² −0.40, rank −0.09; 80/20 split by
   slug R² −0.08, rank 0.51. The walk-forward numbers are the weak
   spot and are kept in view, not dropped.
+- **Two-blind multiples:** log(TVL) ×1.09 walk-forward / ×1.02
+  leave-one-out; category ×1.00 / ×0.98; log(1+chains) ×0.98 /
+  ×0.90; growth_7d ×1.00 / ×1.00; listed_2025_or_later ×1.00 /
+  ×1.00; size_tier ×1.01 / ×1.00; growth_asymmetry ×1.00 / ×1.00;
+  log(1+age) ×1.00 / ×1.00. Only log(TVL) shrinks the miss on both
+  blind tests; the rest sit at ×1.00 and are kept anyway, for the
+  board's discrimination and because the bounty asks the value to
+  follow from TVL, growth and age.
+- **Overall multiples vs a flat median multiple:** ×1.31
+  walk-forward (baseline miss 1.54 vs model 1.18 log points) and
+  ×1.17 leave-one-out (1.63 vs 1.40).
 - Odds: 5-fold Brier 0.19, log-loss 0.57 (the old category-share odds
   scored 0.32 and 1.02 on the same split), with calibration bins
   within 0.11 of the observed launch share and the top decile
-  predicted 92% vs 88% observed.
+  predicted 92% vs 88% observed. Per-kind calibration does not ship
+  (Brier 0.193 → 0.197, log-loss 0.570 → 0.582); the per-kind table
+  is in `VALIDATION.md`.
 - Every value term is tested held-out twice: the model refitted
   without that term, scored leave-one-out and 5-fold, and the table
   is on the dashboard — log(TVL) carries the model (without it the
@@ -137,18 +204,24 @@ view; the fit follows the board.
 
 ## Reference (Top-1 rule)
 
-The top 10 were checked before building: #1 kiencx (966,767) has no
-linked GitHub, nor do #2 beni-1997, #4 nyx77, #6 darren-mitch-vicente,
-#8 swift-orca-68-9468 or #10 behzad-khanlar; #3 kevin and #5 meena1321
-have GitHub profiles but no token-radar repo; #7 reginaldwight's only
-repo is sekolahpalopo (not token-radar); #9 sudhan's
-token-launch-radar was already studied for v5 and is not re-studied
-wholesale here. The scheme signals carried from the top titles are
-"conformal intervals priced per kind" (#8), "66 farm plans, a KPI
-strip, every one of 758 protocols accounted for" (#9),
-"net-per-hour" (#2) and "launch odds that fall with age" (#10). v6
-imitates the first: the per-kind conformal interval on every implied
-value, computed from this entry's own leave-one-out residuals.
+The top 10 were checked before building (2026-11-26): #1 kiencx
+(966,767) has no token-radar repo on GitHub (49 repos checked);
+#2 kevin (966,767, tied) has no usable repo (the one repo is an
+empty 0 KB repo from 2023); #3 nyx77, #5 darren-mitch-vicente,
+#6 swift-orca-68-9468, #8 behzad-khanlar, #9 rstrike and
+#10 silver-ibis-46-1447 have no linked GitHub at all; #4 meena1321
+has a profile but no token-radar repo; #7 sudhan's
+itzsudhan/token-launch-radar is the only usable public repo in the
+top 10 and was already studied for v5. So v7 imitates the Top-1
+scheme from the titles, not from code: "every value term fitted
+and tested held-out twice, token odds from the peers' record,
+integrity strip, costed farm verdicts" (#1) and "every value term
+kept or dropped on two blind tests (walk-forward x2.26,
+leave-one-out x2.99), range honesty, costed farm verdicts in
+$/hour" (#2). The multiples are reported against a flat median
+multiple — the #2 multiples are against an unpublished baseline and
+are not reproduced here. v6's per-kind conformal interval (from the
+#8 title, "conformal intervals priced per kind") is kept.
 
 ## Farm plans
 
@@ -157,8 +230,14 @@ to the protocol's TVL, gas priced per chain, a weekly repeat for 8
 weeks, and a verdict from the rank and the odds, with the costed
 numbers beside it — the farmers' expected pool (5% of the launch
 value, assumed, no airdrop confirmed), the gas, and 2% of the deposit
-as the cost of locking it for 8 weeks. The Farm queue tab sorts the
-same rows by pool vs farm cost.
+as the cost of locking it for 8 weeks. v7 adds the farmer's time:
+150 minutes over the 8-week horizon (fund 10, deposit 15, core
+action 10, eight weekly repeats at 10, exit 15) — 2.5 hours — so
+each plan reports its cost per hour and its expected pool per hour,
+and the Farm queue tab sorts by pool per hour. Best farm by the
+hour: Veda, about $861,099/hour against about $10.40/hour of cost.
+The pool is shared by every farmer and the 5% share is assumed; the
+dashboard says so on every farm step.
 
 ## What "records a token" means
 

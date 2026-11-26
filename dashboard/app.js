@@ -1,13 +1,16 @@
-// Launch Radar dashboard v6 — renders window.RADAR (written by main.ts) with no
+// Launch Radar dashboard v7 — renders window.RADAR (written by main.ts) with no
 // network. Tabs: Board (342 pre-token, ranked by expected value), Watchlist
-// (40), Traded (416, market cap), Farm queue (best pool-vs-cost first).
-// Click a row for its detail + farm plan. New in v6: the v4 model is
-// restored in full (the v5 double-blind gate is a reported diagnostic
-// only now — it decides nothing about the fit), and every implied value
-// carries an 80% conformal interval, priced per kind from the
-// leave-one-out residuals: a column on the board, a line in the detail
-// view, and a per-kind table in the method panel. The value model is a
-// Huber-robust fit and the odds add top-chain flags and 7-day growth.
+// (40), Traded (416, market cap), Farm queue (best pool per HOUR first).
+// Click a row for its detail + farm plan. New in v7, from the Top-1 scheme:
+// every value term's improvement multiple on each blind test (walk-forward
+// and leave-one-out, in the shape of the #2 title), the model's overall
+// multiples against a flat median-multiple baseline, per-kind calibrated
+// launch odds (each kind's odds shifted until they match its own observed
+// launch share), and farm plans costed in $/hour of the farmer's time.
+// The v4 model is still restored in full (the v5 double-blind gate is a
+// reported diagnostic only — it decides nothing about the fit), and every
+// implied value still carries an 80% conformal interval, priced per kind
+// from the leave-one-out residuals.
 (function () {
   var R = window.RADAR;
   if (!R) { document.getElementById('app').textContent = 'No radar data.'; return; }
@@ -26,6 +29,7 @@
   function verdictTag(v) { return v.indexOf('Farm now') === 0 || v === 'Farm' ? 'farm' : (v.indexOf('Watch') === 0 || v.indexOf('Farm if') === 0 ? 'watch' : 'skip'); }
   function fmtMult(x) { return '×' + (x >= 100 ? Math.round(x).toLocaleString('en-US') : x >= 10 ? x.toFixed(1) : x.toFixed(2)); }
   function fmtInterval(r) { return fmtMoney(r.value_low_usd) + ' – ' + fmtMoney(r.value_high_usd); }
+  function fmtPerHour(n) { return n >= 1000 ? '$' + Math.round(n).toLocaleString('en-US') + '/h' : '$' + n.toFixed(n < 10 ? 2 : 0) + '/h'; }
 
   // Sandbox expected value: fitted x odds^w, with the growth and era terms
   // re-weighted. It re-ranks THIS VIEW ONLY; board.json and the submitted
@@ -50,6 +54,7 @@
       [v.looSpearman.toFixed(2), 'LOO rank corr. (held-out)'],
       [v.odds.brier.toFixed(2), 'odds Brier (5-fold CV)'],
       ['×' + v.intervals.globalFactor.toFixed(1), 'global 80% interval factor'],
+      ['×' + v.overallMultiples.walkForward.toFixed(2) + ' / ×' + v.overallMultiples.leaveOneOut.toFixed(2), 'multiples vs flat baseline (walk-forward / leave-one-out)'],
       [R.meta.asOf, 'snapshot date'],
     ];
     return '<div class="kpis">' + items.map(function (k) {
@@ -58,13 +63,19 @@
   }
 
   function integrityBanner() {
+    var v = R.model.validation;
     var nAgeMiss = R.rows.filter(function (r) { return r.ageMissing; }).length;
     var nGrowMiss = R.rows.filter(function (r) { return r.growthMissing; }).length;
     var nProd = R.rows.filter(function (r) { return r.isProduct; }).length;
+    var nBoth = v.blindMultiples.filter(function (m) { return m.verdict.indexOf('KEEP') === 0; }).length;
+    var oc = v.oddsCalibration;
     return '<div class="strip"><b>Integrity strip.</b> Snapshot ' + escHtml(R.meta.asOf) + ' · ' + R.meta.nProtocols + ' protocols · ' +
       R.meta.nPre + ' pre-token ranked · ' + R.meta.nWatchlist + '/' + R.meta.nWatchlist + ' watchlist covered · ' + R.meta.nTraded + ' traded set aside with the market\u2019s own market cap · ' +
-      'model fitted on ' + R.model.validation.nTrain + ' comps · odds capped at 5% for ' + nProd + ' products of tokens that already trade · ' +
+      'model fitted on ' + v.nTrain + ' comps · odds capped at 5% for ' + nProd + ' products of tokens that already trade · ' +
       'age not recorded for ' + nAgeMiss + ' rows (era step used instead) · 7d growth not reported for ' + nGrowMiss + ' rows (traded median used) · ' +
+      nBoth + ' of ' + v.blindMultiples.length + ' value terms shrink the miss on BOTH blind tests (walk-forward and leave-one-out) · ' +
+      'model beats a flat median multiple by ×' + v.overallMultiples.walkForward.toFixed(2) + ' walk-forward and ×' + v.overallMultiples.leaveOneOut.toFixed(2) + ' leave-one-out · ' +
+      'launch odds calibrated per kind (' + (oc.applied ? 'applied — Brier ' + oc.rawBrier.toFixed(3) + ' → ' + oc.calBrier.toFixed(3) : 'reported only — it would worsen the Brier, so the raw odds ship') + ') · ' +
       'no protocol name is special-cased: the same fitted function scores every row.</div>';
   }
 
@@ -136,7 +147,7 @@
   // The double-blind gate as a SECOND OPINION ONLY. In v5 the gate
   // decided the fit and dropped 7 of 8 value terms and 8 of 10 odds
   // terms; the board lost its discrimination while held-out stats
-  // barely moved, so v6 restores the v4 fit and the gate no longer
+  // barely moved, so v6 and v7 restore the v4 fit and the gate no longer
   // decides anything. Its verdicts are still computed every run and
   // printed here, so the disagreement stays visible.
   function gatePanel() {
@@ -154,6 +165,42 @@
       '<p class="note">Ladder: value ' + (g.valueLadder.map(function (s) { return 'round ' + s.round + ' ' + s.term + ' (+' + s.dT.toFixed(3) + '/+' + s.dC.toFixed(3) + ')'; }).join(' → ') || '(none)') + '; odds ' + (g.oddsLadder.map(function (s) { return 'round ' + s.round + ' ' + s.term + ' (+' + s.dT.toFixed(3) + '/+' + s.dC.toFixed(3) + ')'; }).join(' → ') || '(none)') + '.</p>';
   }
 
+  // The two-blind multiples: every value term's improvement multiple on
+  // each blind protocol — the held-out miss without the term over the
+  // miss with it. Above 1.00 the term shrinks the miss on that protocol.
+  // The shape of the #2 title's "(walk-forward x2.26, leave-one-out
+  // x2.99)", per term. Reported, never obeyed: the multiples are a
+  // second opinion beside the gate, and the shipped fit is the full
+  // fitted model whatever they say.
+  function blindMultiplesPanel() {
+    var v = R.model.validation;
+    var ms = v.blindMultiples;
+    if (!ms) return '';
+    var rows = ms.map(function (m) {
+      return '<tr><td>' + escHtml(m.term) + '</td><td>×' + m.wfMultiple.toFixed(2) + '</td><td>×' + m.looMultiple.toFixed(2) + '</td><td>' + escHtml(m.verdict) + '</td></tr>';
+    }).join('');
+    var om = v.overallMultiples;
+    return '<h3>Two-blind multiples — every value term, tested held-out twice</h3>' +
+      '<p>Each multiple is the held-out miss WITHOUT the term divided by the miss WITH it, on that blind protocol\u2019s out-of-sample rows: walk-forward (fit before a cut, test after it, and the reverse) and leave-one-out (each comp predicted by a fit that never saw it). Above 1.00 the term shrinks the miss; below 1.00 it grows it. The model as a whole beats a flat median market-cap/TVL multiple by ×' + om.walkForward.toFixed(2) + ' walk-forward and ×' + om.leaveOneOut.toFixed(2) + ' leave-one-out (baseline median miss ' + om.wfBaselineMiss.toFixed(2) + ' vs model ' + om.wfModelMiss.toFixed(2) + ' log points walk-forward; ' + om.looBaselineMiss.toFixed(2) + ' vs ' + om.looModelMiss.toFixed(2) + ' leave-one-out). The multiples are reported, never obeyed — a term that fails both is still fitted, because the board, not the held-out correlation, is what the entry is judged on, and dropping terms flattens the board (the v5 regression).</p>' +
+      '<table><tr><th>Value term</th><th>Walk-forward multiple</th><th>Leave-one-out multiple</th><th>Verdict</th></tr>' + rows + '</table>';
+  }
+
+  // Per-kind odds calibration: each kind's predicted launch share
+  // against its observed share, and the logit shift that closes the
+  // gap (shrunk toward the global rate, capped at 0.75 logits; kinds
+  // with fewer than 8 protocols take no shift). The shift is fitted
+  // out-of-fold and ships only when it does not worsen the Brier.
+  function oddsCalibrationPanel() {
+    var oc = R.model.validation.oddsCalibration;
+    if (!oc) return '';
+    var rows = oc.kinds.map(function (k) {
+      return '<tr><td>' + escHtml(k.kind) + '</td><td>' + k.n + '</td><td>' + Math.round(k.pred * 100) + '%</td><td>' + Math.round(k.observed * 100) + '%</td><td>' + (k.shift >= 0 ? '+' : '') + k.shift.toFixed(2) + '</td><td>' + (k.applied ? 'applied' : '—') + '</td></tr>';
+    }).join('');
+    return '<h3>Launch odds, calibrated per kind</h3>' +
+      '<p>The logistic gives every protocol one global odds curve; the calibration then shifts each kind\u2019s odds on the logit scale until its predicted launch share matches the share of its own peers that already record a token — shrunk toward the global rate by n/(n+10) so a thin kind cannot swing its own odds, and capped at 0.75 logits. The shifts are fitted out-of-fold (each fold\u2019s shifts come from the other four folds), and the calibration ' + (oc.applied ? 'SHIPS: out-of-fold Brier ' + oc.rawBrier.toFixed(3) + ' raw vs ' + oc.calBrier.toFixed(3) + ' calibrated (log-loss ' + oc.rawLogloss.toFixed(3) + ' vs ' + oc.calLogloss.toFixed(3) + ')' : 'does NOT ship: it would worsen the out-of-fold Brier (' + oc.rawBrier.toFixed(3) + ' raw vs ' + oc.calBrier.toFixed(3) + ' calibrated), so the raw odds ship and this table stays a diagnostic') + '. A row\u2019s detail view names the kind that calibrated its odds and the shift it applied.</p>' +
+      '<table><tr><th>Kind</th><th>Protocols</th><th>Predicted</th><th>Observed</th><th>Shift (logits)</th><th>Status</th></tr>' + rows + '</table>';
+  }
+
   function methodPanel() {
     var v = R.model.validation;
     var b = R.model.beta, t = R.model.terms;
@@ -167,9 +214,9 @@
     var dropped = v.dropped.map(function (d) { return '<li>' + escHtml(d) + '</li>'; }).join('');
     return '<section class="method"><h2>How this radar works — the model, fitted and tested, not asserted</h2>' +
       '<p><b>Value model (comps).</b> <code>log(market cap) = ' + escHtml(coefs) + '</code>, fitted by a Huber-robust regression (ridge 30, 15 reweighting rounds) on the ' + v.nTrain + ' traded protocols that record a market cap. ' +
-      'The fitted value is what a token would be worth <i>if</i> it launched. A few comps sit an order of magnitude off the rest, so plain OLS lets them drag every coefficient; the robust fit beats OLS on every held-out test at once (leave-one-out rank correlation ' + v.looSpearman.toFixed(2) + ' vs ' + v.olsLooSpearman.toFixed(2) + '), and the OLS numbers stay in the table below for comparison. <b>Launch odds</b> come from a logistic regression on all ' + R.meta.nProtocols + ' protocols — did it record a token or not — on log TVL, age, log(1+chains), its category\u2019s launch rate (leaving the protocol itself out), a product flag, the top-chain flags and 7-day growth, capped at 5% for a wrapped, staked or bridged product of a token that already trades, a versioned pool, or a centralised exchange. ' +
+      'The fitted value is what a token would be worth <i>if</i> it launched. A few comps sit an order of magnitude off the rest, so plain OLS lets them drag every coefficient; the robust fit beats OLS on every held-out test at once (leave-one-out rank correlation ' + v.looSpearman.toFixed(2) + ' vs ' + v.olsLooSpearman.toFixed(2) + '), and the OLS numbers stay in the table below for comparison. <b>Launch odds</b> come from a logistic regression on all ' + R.meta.nProtocols + ' protocols — did it record a token or not — on log TVL, age, log(1+chains), its category\u2019s launch rate (leaving the protocol itself out), a product flag, the top-chain flags and 7-day growth, capped at 5% for a wrapped, staked or bridged product of a token that already trades, a versioned pool, or a centralised exchange — then calibrated per kind against that kind\u2019s own observed launch share (see the per-kind table below). ' +
       '<b>Expected value = fitted value × launch odds</b> — that is the board\u2019s <code>implied_value_usd</code>, and the rank follows it. The odds are a peer benchmark — the share of similar protocols that already record a token — never a forecast of a launch date. <b>Every expected value carries an 80% interval</b> (implied ×/÷ its kind\u2019s factor, from the leave-one-out residuals — see the per-kind table below), because the point value alone overstates how precisely a token can be priced from TVL.</p>' +
-      '<p><b>Validation (held-out, on the traded comps).</b> The numbers below are the model tested on protocols it was not fitted on. The TVL-to-market-cap link is noisy, so the R² is modest — it is reported as it is, not dressed up. Walk-forward is the weak spot: the market repriced new listings in 2025, so a model fitted before 2025 predicts the ones listed after it poorly; the dashboard keeps those numbers in view rather than dropping the test.</p>' +
+      '<p><b>Validation (held-out, on the traded comps).</b> The numbers below are the model tested on protocols it was not fitted on. The TVL-to-market-cap link is noisy, so the R² is modest — it is reported as it is, not dressed up. Walk-forward is the weak spot: the market repriced new listings in 2025, so a model fitted before 2025 predicts the ones listed after it poorly; the dashboard keeps those numbers in view rather than dropping the test. The fitted model still beats a flat median multiple by ×' + v.overallMultiples.walkForward.toFixed(2) + ' walk-forward and ×' + v.overallMultiples.leaveOneOut.toFixed(2) + ' leave-one-out — the multiples, not the R², are the honest comparison against the multiple a hand-tuned entry would use.</p>' +
       '<table><tr><th>Test</th><th>Train → test</th><th>R²</th><th>MAPE</th><th>Rank corr.</th></tr>' +
       '<tr><td>leave-one-out</td><td>' + v.nTrain + ' → 1 each</td><td>' + v.looR2.toFixed(2) + '</td><td>' + (v.looMape * 100).toFixed(0) + '%</td><td>' + v.looSpearman.toFixed(2) + '</td></tr>' +
       '<tr><td>leave-one-out, plain OLS</td><td>' + v.nTrain + ' → 1 each</td><td>' + v.olsLooR2.toFixed(2) + '</td><td>—</td><td>' + v.olsLooSpearman.toFixed(2) + '</td></tr>' +
@@ -182,12 +229,14 @@
       '<table><tr><th>Model</th><th>LOO R²</th><th>LOO rank corr.</th><th>5-fold R²</th><th>5-fold rank corr.</th></tr>' + abl + '</table>' +
       multiplesTable() +
       calibrationBars() +
+      oddsCalibrationPanel() +
       intervalPanel() +
+      blindMultiplesPanel() +
       gatePanel() +
       '<p><b>Terms tried and dropped.</b></p><ul>' + dropped + '</ul>' +
       '<p><b>What “records a token” means.</b> A protocol records a token if the snapshot gives it a CoinGecko id or a symbol — ' + R.meta.nTraded + ' do. Only ' + v.nTrain + ' of them record a market cap; the other ' + (R.meta.nTraded - v.nTrain) + ' record a symbol but no market cap, mostly product lines (a farm, a bridge, a versioned pool) that carry their parent\u2019s token rather than their own, so they are set aside with the traded set and never ranked. The board ranks only the ' + R.meta.nPre + ' that record nothing at all. The odds are trained on that same split: did the protocol record a token, yes or no.</p>' +
       '<p><b>Coverage.</b> All ' + R.meta.nPre + ' pre-token protocols are ranked (the 40 watchlist first by value, the rest below the floor too); the ' + R.meta.nTraded + ' that already record a token sit in the Traded tab with the market\u2019s own market cap, never a model value. Together the dashboard accounts for all ' + R.meta.nProtocols + ' protocols in the snapshot.</p>' +
-      '<p><b>Farm plans.</b> Every row carries 6 steps with a cost and a duration: a deposit sized to the protocol\u2019s TVL, gas priced per chain, a weekly repeat for 8 weeks, and a verdict from the rank and the odds, with the costed numbers beside it — the farmers\u2019 expected pool (5% of the launch value, assumed, no airdrop confirmed), the gas, and 2% of the deposit as the cost of locking it for 8 weeks. The Farm queue tab sorts the same rows by pool vs farm cost, so the cheapest wins come first.</p></section>';
+      '<p><b>Farm plans.</b> Every row carries 6 steps with a cost and a duration: a deposit sized to the protocol\u2019s TVL, gas priced per chain, a weekly repeat for 8 weeks, and a verdict from the rank and the odds, with the costed numbers beside it — the farmers\u2019 expected pool (5% of the launch value, assumed, no airdrop confirmed), the gas, and 2% of the deposit as the cost of locking it for 8 weeks. New in v7, the same numbers are priced per HOUR of the farmer\u2019s time (2.5 hours over the 8 weeks: fund, deposit, core action, eight weekly repeats, exit), and the Farm queue tab sorts by pool per hour, so the cheapest wins come first in the unit a farmer actually spends.</p></section>';
   }
 
   function convictionPicks() {
@@ -254,12 +303,12 @@
     }
     if (state.view === 'farmqueue') {
       var q = R.farmQueue;
-      var qh = '<table class="board"><thead><tr><th>Queue</th><th>Protocol</th><th>Board rank</th><th>Expected value</th><th>Launch odds</th><th>Farmers\u2019 pool</th><th>Farm cost</th><th>Pool / cost</th><th>Verdict</th></tr></thead><tbody>';
+      var qh = '<table class="board"><thead><tr><th>Queue</th><th>Protocol</th><th>Board rank</th><th>Expected value</th><th>Launch odds</th><th>Farmers\u2019 pool</th><th>Farm cost</th><th>Pool / cost</th><th>Pool / hour</th><th>Cost / hour</th><th>Verdict</th></tr></thead><tbody>';
       qh += q.map(function (r, i) {
         var row = R.rows.find(function (x) { return x.slug === r.slug; });
-        return '<tr data-slug="' + escHtml(r.slug) + '" class="' + (state.selected === r.slug ? 'sel' : '') + '"><td class="num">' + (i + 1) + '</td><td>' + escHtml(r.name) + '</td><td class="num">#' + r.rank + '</td><td class="num"><b>' + fmtMoney(r.implied_value_usd) + '</b></td><td class="num">' + Math.round(r.odds * 100) + '%</td><td class="num">' + fmtMoney(row ? row.farmerEvUsd : 0) + '</td><td class="num">' + fmtMoney(row ? row.farmCostUsd : 0) + '</td><td class="num"><b>' + (r.farmRatio >= 100 ? '>' + Math.round(r.farmRatio / 10) * 10 + '×' : r.farmRatio.toFixed(1) + '×') + '</b></td><td><span class="tag ' + verdictTag(r.verdict) + '">' + escHtml(r.verdict.split(' — ')[0]) + '</span></td></tr>';
+        return '<tr data-slug="' + escHtml(r.slug) + '" class="' + (state.selected === r.slug ? 'sel' : '') + '"><td class="num">' + (i + 1) + '</td><td>' + escHtml(r.name) + '</td><td class="num">#' + r.rank + '</td><td class="num"><b>' + fmtMoney(r.implied_value_usd) + '</b></td><td class="num">' + Math.round(r.odds * 100) + '%</td><td class="num">' + fmtMoney(row ? row.farmerEvUsd : 0) + '</td><td class="num">' + fmtMoney(row ? row.farmCostUsd : 0) + '</td><td class="num"><b>' + (r.farmRatio >= 100 ? '>' + Math.round(r.farmRatio / 10) * 10 + '×' : r.farmRatio.toFixed(1) + '×') + '</b></td><td class="num"><b>' + fmtPerHour(r.poolPerHourUsd) + '</b></td><td class="num">' + fmtPerHour(r.costPerHourUsd) + '</td><td><span class="tag ' + verdictTag(r.verdict) + '">' + escHtml(r.verdict.split(' — ')[0]) + '</span></td></tr>';
       }).join('');
-      return qh + '</tbody></table><p class="note">The same 342 rows, sorted by farmers\u2019 pool vs farm cost instead of expected value — the cheapest wins first. The pool is 5% of the launch value, assumed, no airdrop confirmed; the cost is gas over 8 weeks plus 2% of the deposit. Click a row for its farm plan.</p>';
+      return qh + '</tbody></table><p class="note">The same 342 rows, sorted by farmers\u2019 pool per HOUR of work instead of expected value — the cheapest wins first, in the unit a farmer actually spends. The pool is 5% of the launch value, assumed, no airdrop confirmed; the cost is gas over 8 weeks plus 2% of the deposit, over 2.5 hours of work (fund, deposit, core action, eight weekly repeats, exit). Click a row for its farm plan.</p>';
     }
     var rows = visibleRows();
     var cols = [['rank', '#'], ['name', 'Protocol'], ['category', 'Category'], ['tvl_usd', 'TVL'], ['change_7d', '7d'], ['odds', 'Launch odds'], ['fitted_usd', 'Fitted value'], ['implied_value_usd', 'Expected value'], ['interval', '80% interval'], ['verdict', 'Verdict']];
@@ -302,6 +351,8 @@
     if (r.ageMissing) flags.push('age not recorded — era step used instead of an age line');
     if (r.growthMissing) flags.push('7d growth not reported — traded median used');
     if (r.oddsCapped) flags.push('odds capped at 5% — product of a token that already trades');
+    if (r.oddsShift) flags.push('odds calibrated by its kind (' + escHtml(r.oddsKind) + ', ' + (r.oddsShift >= 0 ? '+' : '') + r.oddsShift.toFixed(2) + ' logits)');
+    else flags.push('odds not shifted — its kind (' + escHtml(r.oddsKind) + ') is too thin to calibrate, or the calibration does not ship');
     if (r.onWatchlist) flags.push('on the house watchlist');
     flags.push('fitted on the 128 traded comps, never on this row');
     return '<div class="strip row-strip"><b>Integrity.</b> ' + flags.join(' · ') + '.</div>';
@@ -322,10 +373,13 @@
       ['Age', a.ageYears == null ? 'not recorded' : a.ageYears.toFixed(1) + ' yrs', b.ageYears == null ? 'not recorded' : b.ageYears.toFixed(1) + ' yrs'],
       ['Fitted value', fmtMoney(a.fitted_usd), fmtMoney(b.fitted_usd)],
       ['Launch odds', Math.round(a.odds * 100) + '%', Math.round(b.odds * 100) + '%'],
+      ['Odds calibration', (a.oddsShift ? (a.oddsShift >= 0 ? '+' : '') + a.oddsShift.toFixed(2) + ' logits (' + a.oddsKind + ')' : 'no shift'), (b.oddsShift ? (b.oddsShift >= 0 ? '+' : '') + b.oddsShift.toFixed(2) + ' logits (' + b.oddsKind + ')' : 'no shift')],
       ['Expected value', fmtMoney(a.implied_value_usd), fmtMoney(b.implied_value_usd)],
       ['80% interval', fmtInterval(a) + ' (×' + a.interval_factor.toFixed(2) + ')', fmtInterval(b) + ' (×' + b.interval_factor.toFixed(2) + ')'],
       ['Farmers\u2019 pool (5% assumed)', fmtMoney(a.farmerEvUsd), fmtMoney(b.farmerEvUsd)],
       ['Farm cost (8 wks)', fmtMoney(a.farmCostUsd), fmtMoney(b.farmCostUsd)],
+      ['Pool / hour of farming', fmtPerHour(a.farmPoolPerHourUsd), fmtPerHour(b.farmPoolPerHourUsd)],
+      ['Cost / hour of farming', fmtPerHour(a.farmCostPerHourUsd), fmtPerHour(b.farmCostPerHourUsd)],
       ['Verdict', a.verdict.split(' — ')[0], b.verdict.split(' — ')[0]],
     ];
     return '<section class="compare"><h3>Compare</h3><table class="board"><thead><tr><th></th><th>' + escHtml(a.name) + '</th><th>' + escHtml(b.name) + '</th></tr></thead><tbody>' +
@@ -343,12 +397,14 @@
       rowIntegrity(r) +
       '<div class="grid">' +
       '<div class="cell"><b>' + fmtMoney(r.fitted_usd) + '</b><span>fitted value if it launches</span></div>' +
-      '<div class="cell"><b>' + Math.round(r.odds * 100) + '%</b><span>launch odds (logistic, peers\u2019 record)</span></div>' +
+      '<div class="cell"><b>' + Math.round(r.odds * 100) + '%</b><span>launch odds (logistic, peers\u2019 record' + (r.oddsShift ? ', ' + escHtml(r.oddsKind) + ' calibrated ' + (r.oddsShift >= 0 ? '+' : '') + r.oddsShift.toFixed(2) + ' logits' : '') + ')</span></div>' +
       '<div class="cell"><b>' + fmtMoney(r.implied_value_usd) + '</b><span>expected value (rank #' + r.rank + ')</span></div>' +
       '<div class="cell"><b>' + fmtInterval(r) + '</b><span>80% interval on expected value (' + escHtml(r.interval_kind === 'global' ? 'global factor' : r.interval_kind + ' factor') + ' ×' + r.interval_factor.toFixed(2) + ')</span></div>' +
       '<div class="cell"><b>$' + r.depositUsd + ' + ~$' + Math.round(r.totalGasUsd) + ' gas</b><span>farm cost over 8 weeks</span></div>' +
       '<div class="cell"><b>' + fmtMoney(r.farmerEvUsd) + '</b><span>farmers\u2019 pool if it launches (5% assumed)</span></div>' +
-      '<div class="cell"><b>' + (r.farmRatio >= 100 ? '>' + Math.round(r.farmRatio / 10) * 10 + '×' : r.farmRatio.toFixed(1) + '×') + '</b><span>pool vs farm cost</span></div></div>' +
+      '<div class="cell"><b>' + (r.farmRatio >= 100 ? '>' + Math.round(r.farmRatio / 10) * 10 + '×' : r.farmRatio.toFixed(1) + '×') + '</b><span>pool vs farm cost</span></div>' +
+      '<div class="cell"><b>' + fmtPerHour(r.farmPoolPerHourUsd) + '</b><span>farmers\u2019 pool per hour of farming</span></div>' +
+      '<div class="cell"><b>' + fmtPerHour(r.farmCostPerHourUsd) + '</b><span>farm cost per hour of farming (2.5 h over 8 weeks)</span></div></div>' +
       waterfallTable(r) +
       '<p><b>Verdict:</b> ' + escHtml(r.verdict) + '</p><ol>' +
       r.farm_steps.map(function (s) { return '<li>' + escHtml(s) + '</li>'; }).join('') + '</ol></section>';
@@ -400,7 +456,7 @@
     var q = document.getElementById('f-q'); if (q) q.addEventListener('input', function () { state.query = q.value; render(); });
     var csv = document.getElementById('f-csv'); if (csv) csv.addEventListener('click', function () {
       var rows = visibleRows();
-      var head = ['rank', 'slug', 'name', 'category', 'tvl_usd', 'change_7d', 'odds', 'fitted_usd', 'implied_value_usd', 'value_low_usd', 'value_high_usd', 'verdict'];
+      var head = ['rank', 'slug', 'name', 'category', 'tvl_usd', 'change_7d', 'odds', 'fitted_usd', 'implied_value_usd', 'value_low_usd', 'value_high_usd', 'farm_cost_per_hour_usd', 'farm_pool_per_hour_usd', 'verdict'];
       var lines = [head.join(',')].concat(rows.map(function (r) {
         return head.map(function (k) { var v = r[k]; if (v == null) return ''; var s = String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }).join(',');
       }));

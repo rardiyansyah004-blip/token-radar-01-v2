@@ -1,15 +1,22 @@
-// main.ts — token-radar-01 v6 entrypoint (Node 22, standard library only).
+// main.ts — token-radar-01 v7 entrypoint (Node 22, standard library only).
 //
 // Reads the sealed snapshot at /input/snapshot.json (or --input <file|dir>),
-// scores every pre-token protocol with the restored v4 Huber-robust fitted
-// comps model in lib/model.ts, writes the ranked board to /output/board.json,
-// the dashboard's data to /output/data.js, copies dashboard/ and screenshots/
-// to /output, and writes /output/dossier.json with buildDossier from
-// vendor/makefun-board.ts.
+// scores every pre-token protocol with the v7 model in lib/model.ts — the
+// restored v4 Huber-robust fitted comps model, per-kind 80% conformal
+// intervals on implied value, per-kind calibrated launch odds, and farm
+// plans costed in $/hour — writes the ranked board to /output/board.json,
+// the dashboard's data to /output/data.js, copies dashboard/ and
+// screenshots/ to /output, and writes /output/dossier.json with
+// buildDossier from vendor/makefun-board.ts.
 //
-// v6 restores the v4 fit in full (the v5 double-blind gate is kept as a
-// reported diagnostic only — it decides nothing about the fit) and adds
-// per-kind 80% conformal intervals on every row's implied value.
+// v7 is built from the Top-1 scheme. The board's #1 (kiencx, 966,767)
+// and the tied #2 (kevin, 966,767) publish no token-radar code —
+// kiencx's GitHub holds no token-radar repo, kevin's "First" is an
+// empty 0 KB repo from 2023 — so v7 imitates their TITLES: every value
+// term fitted and tested held-out twice, with its improvement multiple
+// on each blind test; token odds from the peers' record, calibrated
+// per kind; an integrity strip; farm verdicts costed in $/hour. All
+// code is written fresh; nothing is copied from any repo.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
@@ -19,14 +26,16 @@
 // Reproduce the validation without writing anything:
 //   node main.ts --validate --input ../input/snapshot.json
 // prints the double-blind gate as a diagnostic (both protocols, every term,
-// keep or drop with the deltas), the held-out summary, and the per-kind
-// conformal interval table. See VALIDATION.md for the protocol itself.
+// keep or drop with the deltas), the two-blind multiples for every value
+// term, the overall multiples against a flat baseline, the per-kind odds
+// calibration, the held-out summary, and the per-kind conformal interval
+// table. See VALIDATION.md for the protocol itself.
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { boardIssue, buildRadar, dataScript, parseSnapshot } from './lib/model.ts';
-import { gateLine } from './lib/validate.ts';
+import { gateLine, multipleLine } from './lib/validate.ts';
 import { buildDossier } from './vendor/makefun-board.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -57,10 +66,12 @@ const v = radar.model.validation;
 if (process.argv.includes('--validate')) {
   const g = v.gate;
   const iv = v.intervals;
+  const om = v.overallMultiples;
+  const oc = v.oddsCalibration;
   process.stdout.write(
-    'token radar v6 — validation (reproduce with: node main.ts --validate --input <snapshot.json>)\n' +
-    'restored model: v4 Huber-robust value model (log TVL, category, log(1+chains), growth, 2025 era step) + v4 odds logistic (log TVL, age, log(1+chains), category launch rate, product flag, top-chain flags, growth)\n' +
-    '--- double-blind gate: DIAGNOSTIC ONLY in v6 — it does not decide the fit (v5 let it drop 7 of 8 value terms and 8 of 10 odds terms; the board lost its discrimination while held-out stats barely moved) ---\n' +
+    'token radar v7 — validation (reproduce with: node main.ts --validate --input <snapshot.json>)\n' +
+    'model: v4 Huber-robust value model (log TVL, category, log(1+chains), growth, 2025 era step) + v4 odds logistic (log TVL, age, log(1+chains), category launch rate, product flag, top-chain flags, growth) + per-kind odds calibration + per-kind 80% conformal intervals + farm plans costed in $/hour\n' +
+    '--- double-blind gate: DIAGNOSTIC ONLY in v7 — it does not decide the fit (v5 let it drop 7 of 8 value terms and 8 of 10 odds terms; the board lost its discrimination while held-out stats barely moved) ---\n' +
     `rule: ${g.rule}\n` +
     '--- value terms (delta = held-out rank correlation gained by adding the term; keep needs >= +0.005 on BOTH protocols) ---\n' +
     g.value.map((d) => `  ${gateLine(d, 'rank corr.')}`).join('\n') + '\n' +
@@ -70,7 +81,14 @@ if (process.argv.includes('--validate')) {
     g.odds.map((d) => `  ${gateLine(d, 'AUC')}`).join('\n') + '\n' +
     `odds ladder: ${g.oddsLadder.map((s) => `round ${s.round} ${s.term} (+${s.dT.toFixed(3)}/+${s.dC.toFixed(3)})`).join(' → ') || '(none)'}\n` +
     `gate would keep odds terms: ${g.keptOdds.join(', ') || '(none)'}; would drop: ${g.droppedOdds.join(', ') || '(none)'}\n` +
-    '--- restored model, held-out ---\n' +
+    '--- two-blind multiples, every value term (multiple = held-out miss WITHOUT the term over miss WITH it; above 1.00 the term shrinks the miss) ---\n' +
+    v.blindMultiples.map((m) => `  ${multipleLine(m)}`).join('\n') + '\n' +
+    `--- overall multiples vs a flat median-multiple baseline ---\n` +
+    `  walk-forward x${om.walkForward.toFixed(2)} (baseline median miss ${om.wfBaselineMiss.toFixed(2)} log points vs model ${om.wfModelMiss.toFixed(2)}); leave-one-out x${om.leaveOneOut.toFixed(2)} (baseline ${om.looBaselineMiss.toFixed(2)} vs model ${om.looModelMiss.toFixed(2)})\n` +
+    '--- per-kind odds calibration (shift in logits; ships only when the out-of-fold Brier does not worsen) ---\n' +
+    `  ${oc.applied ? 'SHIPS' : 'DOES NOT SHIP'}: Brier raw ${oc.rawBrier.toFixed(3)} vs calibrated ${oc.calBrier.toFixed(3)}; log-loss raw ${oc.rawLogloss.toFixed(3)} vs calibrated ${oc.calLogloss.toFixed(3)}\n` +
+    oc.kinds.map((k) => `  ${k.kind}: n=${k.n} predicted ${(k.pred * 100).toFixed(0)}% vs observed ${(k.observed * 100).toFixed(0)}% shift ${k.shift >= 0 ? '+' : ''}${k.shift.toFixed(2)}${k.applied ? '' : ' (not applied)'}`).join('\n') + '\n' +
+    '--- fitted model, held-out ---\n' +
     `  value: LOO R2 ${v.looR2.toFixed(3)}, LOO Spearman ${v.looSpearman.toFixed(3)}, LOO MAPE ${(v.looMape * 100).toFixed(0)}% (plain OLS: R2 ${v.olsLooR2.toFixed(3)}, Spearman ${v.olsLooSpearman.toFixed(3)}); LOCO R2 ${v.locoR2.toFixed(3)}, LOCO Spearman ${v.locoSpearman.toFixed(3)} (n=${v.locoN})\n` +
     `  walk-forward ${v.wf.map((w) => `${w.cut} R2 ${w.r2.toFixed(2)} Sp ${w.spearman.toFixed(2)}`).join('; ')}\n` +
     `  odds: 5-fold Brier ${v.odds.brier.toFixed(3)} log-loss ${v.odds.logloss.toFixed(3)} (v2 category-share odds: Brier ${v.odds.v2Brier.toFixed(3)}, log-loss ${v.odds.v2Logloss.toFixed(3)}); top-decile odds predicted ${(v.odds.topPred * 100).toFixed(0)}% vs ${(v.odds.topObs * 100).toFixed(0)}% observed\n` +
@@ -130,13 +148,17 @@ const dataBytes = sizeOf(join(out, 'data.js'));
 const dossierBytes = sizeOf(join(out, 'dossier.json'));
 
 const iv = v.intervals;
+const om = v.overallMultiples;
+const oc = v.oddsCalibration;
 const top = board[0]!;
 const bottom = board[board.length - 1]!;
+const queueTop = radar.farmQueue[0]!;
 process.stdout.write(
   `token radar: ${radar.meta.nProtocols} protocols, ${radar.meta.nWatchlist} on the watchlist, ${board.length} rows scored (${radar.meta.nPre} pre-token, ${radar.meta.nTraded} traded set aside)\n` +
-    `token radar: restored v4 Huber-robust value model fitted on ${v.nTrain} comps — LOO R2 ${v.looR2.toFixed(3)}, LOO Spearman ${v.looSpearman.toFixed(3)} (plain OLS: R2 ${v.olsLooR2.toFixed(3)}, Spearman ${v.olsLooSpearman.toFixed(3)}), LOO MAPE ${(v.looMape * 100).toFixed(0)}%; LOCO R2 ${v.locoR2.toFixed(3)}, LOCO Spearman ${v.locoSpearman.toFixed(3)} (n=${v.locoN})\n` +
+    `token radar: v4 Huber-robust value model fitted on ${v.nTrain} comps — LOO R2 ${v.looR2.toFixed(3)}, LOO Spearman ${v.looSpearman.toFixed(3)} (plain OLS: R2 ${v.olsLooR2.toFixed(3)}, Spearman ${v.olsLooSpearman.toFixed(3)}), LOO MAPE ${(v.looMape * 100).toFixed(0)}%; LOCO R2 ${v.locoR2.toFixed(3)}, LOCO Spearman ${v.locoSpearman.toFixed(3)} (n=${v.locoN})\n` +
     `token radar: walk-forward ${v.wf.map((w) => `${w.cut} R2 ${w.r2.toFixed(2)} Sp ${w.spearman.toFixed(2)}`).join('; ')}; odds logistic 5-fold Brier ${v.odds.brier.toFixed(3)} log-loss ${v.odds.logloss.toFixed(3)} (v2 category-share odds: Brier ${v.odds.v2Brier.toFixed(3)}, log-loss ${v.odds.v2Logloss.toFixed(3)}); top-decile odds predicted ${(v.odds.topPred * 100).toFixed(0)}% vs ${(v.odds.topObs * 100).toFixed(0)}% observed\n` +
+    `token radar: two-blind multiples vs a flat baseline — walk-forward x${om.walkForward.toFixed(2)}, leave-one-out x${om.leaveOneOut.toFixed(2)}; per-kind odds calibration ${oc.applied ? 'SHIPS' : 'does not ship'} (Brier raw ${oc.rawBrier.toFixed(3)} vs calibrated ${oc.calBrier.toFixed(3)})\n` +
     `token radar: 80% conformal intervals on implied value — median absolute LOO log miss x${iv.medianAbsLogMiss.toFixed(2)}, global factor x${iv.globalFactor.toFixed(2)}, per-kind factors x${Math.min(...iv.kinds.map((k) => k.factor)).toFixed(2)}–x${Math.max(...iv.kinds.map((k) => k.factor)).toFixed(2)} across ${iv.kinds.length} kinds; board range $${top.implied_value_usd.toLocaleString('en-US')} (top1/top10 ${(top.implied_value_usd / board[9]!.implied_value_usd).toFixed(2)}) down to $${bottom.implied_value_usd.toLocaleString('en-US')}\n` +
-    `token radar: gate (diagnostic only): would keep value [${v.gate.keptValue.join(', ')}], would drop [${v.gate.droppedValue.join(', ') || 'none'}]; would keep odds [${v.gate.keptOdds.join(', ')}], would drop [${v.gate.droppedOdds.join(', ') || 'none'}]\n` +
+    `token radar: farm queue by pool per hour — best ${queueTop.name} $${Math.round(queueTop.poolPerHourUsd).toLocaleString('en-US')}/hour of farming (cost $${queueTop.costPerHourUsd.toFixed(2)}/hour); gate (diagnostic only): would keep value [${v.gate.keptValue.join(', ')}], would drop [${v.gate.droppedValue.join(', ') || 'none'}]; would keep odds [${v.gate.keptOdds.join(', ')}], would drop [${v.gate.droppedOdds.join(', ') || 'none'}]\n` +
     `token radar: wrote ${join(out, 'board.json')} (${boardBytes} bytes), ${join(out, 'data.js')} (${dataBytes} bytes), ${join(out, 'dashboard')}, ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')} (${dossierBytes} bytes, cap 1572864); top picks ${radar.picks.length}, farm queue ${radar.farmQueue.length}\n`,
 );

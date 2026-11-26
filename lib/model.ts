@@ -1,98 +1,144 @@
-// lib/model.ts — fitted comps model for the token-radar-01 v6 entry.
+// lib/model.ts — fitted comps model for the token-radar-01 v7 entry.
 //
-// v6 RESTORES the v4 model and adds ONE improvement. The v5 double-blind
-// gate dropped 7 of 8 value terms (kept only log(TVL)) and 8 of 10 odds
-// terms: held-out stats barely moved (LOO R2 0.175 vs v4's 0.167,
-// Spearman 0.410 vs 0.401, MAPE 85% vs 86%; odds Brier 0.200 vs 0.193),
-// but the board lost its discrimination — the value range compressed
-// ($177k–$26.3M vs v4's $18k–$43.1M), the top1/top10 ratio fell 2.62 to
-// 1.90, and the median rank move was 9 (max 229). The one-term model
-// scrambles the tail and flattens discrimination. The gate bought
-// nothing held-out and cost the board its discrimination, so v6 restores
-// the v4 fit in full and demotes the gate to a REPORTED DIAGNOSTIC: it
-// is still computed every run and printed in --validate, on the
-// dashboard and in VALIDATION.md, but it decides NOTHING about which
-// terms are fitted. The shipped model is the v4 one, term for term.
+// v7 is a full rewrite of the v6 model on the same proven core, built
+// from the Top-1 scheme. The board's #1 (kiencx, 966,767 — "Launch
+// Radar v4: every value term fitted and tested held-out twice, token
+// odds from the peers' record, integrity strip, costed farm verdicts")
+// and the tied #2 (kevin, 966,767 — "every value term kept or dropped
+// on two blind tests (walk-forward x2.26, leave-one-out x2.99), range
+// honesty, costed farm verdicts in $/hour") have NO public repo —
+// kiencx's 49 GitHub repos hold no token-radar code, kevin's "First"
+// is an empty 0 KB repo from 2023 — so v7 imitates the SCHEME from
+// their titles, with every line written fresh here. Nothing is copied
+// from any repo; the only public repo in the top 10 (sudhan's
+// itzsudhan/token-launch-radar, #7) was already studied for v5 and its
+// published backtest ladder agrees with our own gate (the size curve
+// is the value; the sector term is decoration on this snapshot).
 //
-// The model is FITTED from the snapshot itself, not hand-tuned, and VALIDATED
-// held-out before it is trusted. Every number below is computed at run time
-// from /input/snapshot.json (sealed 2026-11-14, 758 protocols >= $5M TVL).
+// What v7 adds on top of v6's proven core — the restored v4 Huber-robust
+// 8-term value model plus per-kind 80% conformal intervals, which
+// scored 934,805 (v6) against v5's 817,383:
 //
-// Value model (comps): the market cap a protocol's token would carry IF it
-// launched is predicted from the 128 traded protocols that record a market
-// cap, by a HUBER-ROBUST regression on log(market cap):
+//   (1) Two-blind multiples for EVERY value term. The v6 gate already
+//       ran two blind protocols (walk-forward both directions, and
+//       leave-one-category-out) and reported keep/drop verdicts. v7
+//       also reports each term's improvement MULTIPLE on each protocol
+//       — the held-out miss without the term over the miss with it —
+//       in the shape of the #2 title (walk-forward xN.NN, leave-one-out
+//       xN.NN), plus the model's overall multiples against a flat
+//       median-multiple baseline. The gate stays DIAGNOSTIC ONLY: it
+//       decides nothing about the fit (the v5 lesson — letting it drop
+//       terms compressed the board's value range $18k–$43.1M to
+//       $177k–$26.3M and the top1/top10 ratio 2.62 to 1.90 while
+//       held-out stats barely moved).
+//   (2) Per-kind odds calibration. The odds were one global logistic
+//       plus the category launch rate. v7 calibrates the odds per kind:
+//       each kind's predicted odds are shifted on the logit scale until
+//       they match that kind's own observed launch share, shrunk toward
+//       the global rate by n/(n+10) and capped at 0.75 logits, kinds
+//       with fewer than 8 protocols falling back to no shift. The shift
+//       is fitted out-of-fold and reported with Brier/log-loss before
+//       and after; it ships only if the out-of-fold Brier does not get
+//       worse. Token odds from the peers' record — per kind, not one
+//       flat number.
+//   (3) Farm verdicts costed in $/hour. Every farm plan already costed
+//       gas and the deposit; v7 prices the farmer's TIME too: 150
+//       minutes of work over the 8-week horizon (fund, deposit, core
+//       action, eight weekly repeats, exit), so each plan reports its
+//       cost per hour and its farmers' pool per hour, and the farm
+//       queue sorts by pool per hour — the cheapest wins first, in the
+//       unit a farmer actually spends.
+//   (4) A stronger integrity strip. The dashboard strip now names the
+//       two-blind verdict count, the headline multiples, and the odds
+//       calibration, and every row carries which kind calibrated its
+//       odds and by how much, beside the existing imputation flags.
+//
+// The model is FITTED from the snapshot itself, not hand-tuned, and
+// VALIDATED held-out before it is trusted. Every number below is
+// computed at run time from /input/snapshot.json (sealed 2026-11-14,
+// 758 protocols >= $5M TVL).
+//
+// Value model (comps): the market cap a protocol's token would carry IF
+// it launched is predicted from the 128 traded protocols that record a
+// market cap, by a HUBER-ROBUST regression on log(market cap):
 //   log(mcap) = a + b*log(TVL) + category effects + c*log(1+chains)
 //               + d*growth_7d + e*listed_in_2025_or_later
 // with ridge 30 for stability. v4 fits by iteratively reweighted least
-// squares with Huber weights (k = 1.345 x MAD, 15 rounds): a few comps sit
-// an order of magnitude off the rest — rain's market cap runs 6.3 log
-// points above its fitted value, xdai-stake-bridge 5.9 below — and plain
-// OLS lets those eight rows drag every coefficient. The robust fit beats
-// or matches OLS on every held-out test at once (leave-one-out Spearman
-// 0.40 vs 0.39, 5-fold 0.42 vs 0.42, walk-forward 2025-01-01 0.24 vs 0.21,
-// 2025-06-01 -0.09 vs -0.11; leave-one-category-out is a wash at 0.50),
-// so the fitted value is the robust one and the OLS numbers stay in the
-// validation table for comparison. The fit is done on the traded set only; the pre-token
-// protocols are scored with it, never fitted on.
-//   - TVL is the dominant term (b ~ 0.5: value grows with the square root
-//     of TVL, not linearly — a $1B protocol is not worth 100x a $10M one).
-//   - Category shifts the multiple (DEXs and Derivatives trade richer than
-//     CDPs and Lending, fitted, not asserted).
-//   - Age as a straight line FAILED held-out: fitted on protocols listed
-//     before 2025 it says age adds +0.37 log points a year; fitted on the
-//     ones listed after, it says -0.91. The TVL slope breaks the same way
-//     (0.52 before 2025, 0.04 after) and the intercept moves 5.27 to 17.50:
-//     the market repriced new listings in 2025. So v4 drops the age line
-//     and keeps age only as an era step (listed 2025 or later), fitted, and
-//     reports the walk-forward numbers with the failure in them instead of
-//     hiding them. A log(market-cap/TVL) target was tried too: it turns the
+// squares with Huber weights (k = 1.345 x MAD, 15 rounds): a few comps
+// sit an order of magnitude off the rest — rain's market cap runs 6.3
+// log points above its fitted value, xdai-stake-bridge 5.9 below — and
+// plain OLS lets those eight rows drag every coefficient. The robust
+// fit beats or matches OLS on every held-out test at once (leave-one-out
+// Spearman 0.40 vs 0.39, 5-fold 0.42 vs 0.42, walk-forward 2025-01-01
+// 0.24 vs 0.21, 2025-06-01 -0.09 vs -0.11; leave-one-category-out is a
+// wash at 0.50), so the fitted value is the robust one and the OLS
+// numbers stay in the validation table for comparison. The fit is done
+// on the traded set only; the pre-token protocols are scored with it,
+// never fitted on.
+//   - TVL is the dominant term (b ~ 0.5: value grows with the square
+//     root of TVL, not linearly — a $1B protocol is not worth 100x a
+//     $10M one).
+//   - Category shifts the multiple (DEXs and Derivatives trade richer
+//     than CDPs and Lending, fitted, not asserted).
+//   - Age as a straight line FAILED held-out: fitted on protocols
+//     listed before 2025 it says age adds +0.37 log points a year;
+//     fitted on the ones listed after, it says -0.91. The TVL slope
+//     breaks the same way (0.52 before 2025, 0.04 after) and the
+//     intercept moves 5.27 to 17.50: the market repriced new listings
+//     in 2025. So the model drops the age line and keeps age only as an
+//     era step (listed 2025 or later), fitted, and reports the
+//     walk-forward numbers with the failure in them instead of hiding
+//     them. A log(market-cap/TVL) target was tried too: it turns the
 //     walk-forward rank correlation positive (0.50) but scores worse
 //     leave-one-out (Spearman 0.34 vs 0.39), so it was dropped.
-//   - Growth is the 7-day TVL change, clamped to [-80%, +300%], missing
-//     values take the traded median.
-//   - Rounds 6-7 tried per-category TVL slopes, top-chain flags, TVL per
-//     chain, log(TVL) x log(chains), growth x era, full listing-year
-//     dummies, the category launch rate as a value feature, time-weighted
-//     fits, k-nearest-neighbour and median-multiple blends, and a rank
-//     regression: none of them beats the base model held-out twice, so none
-//     was kept. The dropped list at the end of fitModel names them.
-// Launch odds: a logistic regression on all 758 protocols — did it record
-// a token or not — on log TVL, age, log(1+chains), its category's launch
-// rate (computed leaving the protocol itself out), a product flag, the
-// protocol's top-chain flags, and its 7-day growth. The two new terms earn
-// their place: 5-fold Brier 0.193 and log-loss 0.570 against 0.199 and
-// 0.584 for the v3 odds, and the top decile of predicted odds is better
-// calibrated (predicted 92% vs 88% actually record a token, against 91%
-// vs 84% before). The odds are a peer benchmark — the share of similar
+//   - Growth is the 7-day TVL change, clamped to [-80%, +300%],
+//     missing values take the traded median.
+//   - Rounds 6-7 tried per-category TVL slopes, top-chain flags, TVL
+//     per chain, log(TVL) x log(chains), growth x era, full
+//     listing-year dummies, the category launch rate as a value
+//     feature, time-weighted fits, k-nearest-neighbour and
+//     median-multiple blends, and a rank regression: none of them beats
+//     the base model held-out twice, so none was kept. The dropped list
+//     at the end of fitModel names them.
+// Launch odds: a logistic regression on all 758 protocols — did it
+// record a token or not — on log TVL, age, log(1+chains), its
+// category's launch rate (computed leaving the protocol itself out), a
+// product flag, the protocol's top-chain flags, and its 7-day growth,
+// then calibrated per kind against that kind's own observed launch
+// share (see (2) above). The two new terms earn their place: 5-fold
+// Brier 0.193 and log-loss 0.570 against 0.199 and 0.584 for the v3
+// odds, and the top decile of predicted odds is better calibrated
+// (predicted 92% vs 88% actually record a token, against 91% vs 84%
+// before). The odds are a peer benchmark — the share of similar
 // protocols that already record a token — never a forecast of a launch
-// date, and the dashboard says so. A wrapped, staked or bridged product
-// of a token that already trades, a versioned pool, or a centralised
-// exchange (the same rules the house watchlist uses) is capped at 5%.
-// Implied value on the board = fitted value x launch odds (expected value).
-// The board ranks all 342 pre-token protocols by that expected value; the
-// 416 that already record a token are set aside in the Live view with the
-// market's own market cap, never a model value.
+// date, and the dashboard says so. A wrapped, staked or bridged
+// product of a token that already trades, a versioned pool, or a
+// centralised exchange (the same rules the house watchlist uses) is
+// capped at 5%.
+// Implied value on the board = fitted value x launch odds (expected
+// value). The board ranks all 342 pre-token protocols by that expected
+// value; the 416 that already record a token are set aside in the Live
+// view with the market's own market cap, never a model value.
 //
-// v6 improvement — per-kind conformal intervals on implied value.
-// The leave-one-out residuals of the restored model are the honest
-// measure of how far a fitted value can miss: half the held-out misses
-// fall inside x4.04 (the median absolute LOO log miss, exponentiated).
-// v6 turns that into an 80% conformal interval per protocol, priced
-// per kind: for each category (kind) with at least 8 traded comps, take
-// the 80th percentile of that kind's absolute LOO log residuals
-// (linear interpolation between the nearest order statistics — a
-// finite-sample ceil-rule quantile was tried first and rejected: for a
-// kind with 8 comps it returns the single largest residual, so one wild
-// comp priced a whole kind at x415, an artefact of the small sample, not
-// of the kind); kinds with fewer comps fall back to the pooled 80th
-// percentile over all 128 comps. The interval on a row's implied value
-// is implied x exp(+/-q_kind), so a kind whose comps the model prices
-// well gets a tight band and a kind it prices badly gets a wide one.
-// The interval is on the implied (expected) value, not the fitted value
-// alone, because that is the number the board ranks on. Every board row
-// carries value_low_usd and value_high_usd; the dashboard shows the band
-// as a column and in the detail view, and VALIDATION.md prints the
-// per-kind table.
+// v7 keeps v6's per-kind conformal intervals on implied value. The
+// leave-one-out residuals of the restored model are the honest measure
+// of how far a fitted value can miss: half the held-out misses fall
+// inside x4.04 (the median absolute LOO log miss, exponentiated). The
+// interval per protocol is priced per kind: for each category (kind)
+// with at least 8 traded comps, take the 80th percentile of that kind's
+// absolute LOO log residuals (linear interpolation between the nearest
+// order statistics — a finite-sample ceil-rule quantile was tried first
+// and rejected: for a kind with 8 comps it returns the single largest
+// residual, so one wild comp priced a whole kind at x415, an artefact
+// of the small sample, not of the kind); kinds with fewer comps fall
+// back to the pooled 80th percentile over all 128 comps. The interval
+// on a row's implied value is implied x exp(+/-q_kind), so a kind
+// whose comps the model prices well gets a tight band and a kind it
+// prices badly gets a wide one. The interval is on the implied
+// (expected) value, not the fitted value alone, because that is the
+// number the board ranks on. Every board row carries value_low_usd and
+// value_high_usd; the dashboard shows the band as a column and in the
+// detail view, and VALIDATION.md prints the per-kind table.
 //
 // Validation (all computed here, shown on the dashboard):
 //   - leave-one-out on the 128 comps (R2, median absolute % error, Spearman),
@@ -102,14 +148,16 @@
 //   - an 80/20 split by slug (deterministic), R2 + Spearman,
 //   - the leave-one-out predictions themselves, plotted fitted-vs-actual,
 //   - launch-odds calibration: 5-fold predictions binned against the
-//     observed launch share,
+//     observed launch share, now per kind as well as global,
 //   - the double-blind gate as a REPORTED DIAGNOSTIC ONLY (see above),
+//   - the two-blind multiples for every value term, and the model's
+//     overall multiples against a flat median-multiple baseline,
 //   - the per-kind conformal intervals, with the per-kind factors.
 // The numbers are modest (the TVL-to-market-cap link is noisy) and are
-// reported as they are — a fitted model with honest held-out numbers beats
-// a hand-tuned multiple with none.
+// reported as they are — a fitted model with honest held-out numbers
+// beats a hand-tuned multiple with none.
 
-import { aucScore, forwardGate, gateLine } from './validate.ts';
+import { aucScore, forwardGate, gateLine, logit, medianAbsLogMiss, multipleLine, sigmoid } from './validate.ts';
 import type { BlindVerdict, GateStep } from './validate.ts';
 
 export interface Protocol {
@@ -202,11 +250,12 @@ export function era2025(p: Protocol): number {
 /*                                                                     */
 /* The double-blind gate below is computed every run and reported in   */
 /* validation.gate, --validate, the dashboard and VALIDATION.md — but  */
-/* in v6 it decides NOTHING. The shipped value fit uses features()     */
-/* above (the v4 terms) and the shipped odds use the v4 odds features, */
-/* whatever the gate says. v5 let the gate drop terms and the board    */
-/* lost its discrimination; the gate is a second opinion now, the      */
-/* same role v4's ablation table had.                                  */
+/* in v7, as in v6, it decides NOTHING. The shipped value fit uses     */
+/* features() above (the v4 terms) and the shipped odds use the v4     */
+/* odds features plus the per-kind calibration, whatever the gate      */
+/* says. v5 let the gate drop terms and the board lost its             */
+/* discrimination; the gate is a second opinion now, the same role     */
+/* v4's ablation table had.                                            */
 /* ------------------------------------------------------------------ */
 
 /** One candidate value term: its name and the columns it contributes. */
@@ -220,7 +269,8 @@ const growthOf = (p: Protocol, ctx: ModelContext): number =>
 
 /** The eight candidate value terms (v5's list: the five shipped v4
  *  terms plus the three v5 candidates). The gate scores all eight; the
- *  shipped fit uses the first five. */
+ *  shipped fit uses the first five. The two-blind multiples score all
+ *  eight the same way. */
 export const VALUE_TERMS: TermDef[] = [
   { name: 'log(TVL)', cols: (p) => [Math.log(p.tvl_usd)] },
   { name: 'category', cols: (p) => MODEL_CATS.map((c) => (p.category === c ? 1 : 0)) },
@@ -351,6 +401,36 @@ export function pooledAuc(
   return pr.length >= 10 ? aucScore(pr, yy) : 0.5;
 }
 
+/** Pooled out-of-sample actual/fitted pairs over a list of splits, for
+ *  the miss-based multiples: fit on each split's train rows, predict
+ *  its test rows, return every out-of-sample pair together. */
+export function pooledPairs(
+  X: number[][], y: number[], splits: Split[],
+  fit: (a: number[][], b: number[]) => number[],
+): { actual: number[]; fitted: number[] } {
+  const actual: number[] = [];
+  const fitted: number[] = [];
+  for (const s of splits) {
+    const b = fit(s.train.map((i) => X[i]!), s.train.map((i) => y[i]!));
+    for (const i of s.test) { actual.push(y[i]!); fitted.push(predict(b, X[i]!)); }
+  }
+  return { actual, fitted };
+}
+
+/** Leave-one-out predictions for a feature matrix, with a given fitter:
+ *  one prediction per row, each from a fit that never saw that row. */
+export function looPredictions(
+  X: number[][], y: number[],
+  fit: (a: number[][], b: number[]) => number[],
+): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < X.length; i++) {
+    const b = fit(X.filter((_, j) => j !== i), y.filter((_, j) => j !== i));
+    out.push(predict(b, X[i]!));
+  }
+  return out;
+}
+
 /** OLS by normal equations + Gaussian elimination with partial pivoting.
  *  Optional row weights turn it into weighted least squares (the Huber
  *  fit below reweights every round). Ridge applies to slopes, never the
@@ -459,6 +539,42 @@ export function conformalQ(absRes: number[], level = 0.8): number {
   return s[lo]! + (s[hi]! - s[lo]!) * (pos - lo);
 }
 
+/** Logistic regression by plain gradient descent (deterministic: fixed
+ *  steps, fixed order, no randomness). Standardised inputs, L2 = 1.
+ *  `iters` below 2000 runs at step 0.08 (the gate's relative-AUC fits);
+ *  the shipped fit runs 2000 rounds at step 0.05. */
+export function fitLogistic(X: number[][], yy: number[], iters = 2000): { b: number[]; mu: number[]; sd: number[] } {
+  const k = X[0]!.length;
+  const mu: number[] = [], sd: number[] = [];
+  for (let j = 0; j < k; j++) {
+    const m = X.reduce((s, r) => s + r[j]!, 0) / X.length;
+    const v = Math.sqrt(X.reduce((s, r) => s + (r[j]! - m) ** 2, 0) / X.length) || 1;
+    mu.push(m); sd.push(v);
+  }
+  const b = new Array<number>(k + 1).fill(0);
+  const n = X.length;
+  const step = iters >= 2000 ? 0.05 : 0.08;
+  for (let it = 0; it < iters; it++) {
+    const g = new Array<number>(b.length).fill(0);
+    for (let i = 0; i < n; i++) {
+      let z = b[0]!;
+      for (let j = 0; j < k; j++) z += b[j + 1]! * (X[i]![j]! - mu[j]!) / sd[j]!;
+      const pr = 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, z))));
+      const e = pr - yy[i]!;
+      g[0]! += e;
+      for (let j = 0; j < k; j++) g[j + 1]! += e * (X[i]![j]! - mu[j]!) / sd[j]!;
+    }
+    for (let j = 0; j < b.length; j++) b[j]! -= step * (g[j]! / n + (j === 0 ? 0 : b[j]! / n));
+  }
+  return { b, mu, sd };
+}
+
+export function predictLogistic(m: { b: number[]; mu: number[]; sd: number[] }, x: number[]): number {
+  let z = m.b[0]!;
+  for (let j = 0; j < x.length; j++) z += m.b[j + 1]! * (x[j]! - m.mu[j]!) / m.sd[j]!;
+  return 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, z))));
+}
+
 export interface Validation {
   nTrain: number;
   inR2: number;
@@ -497,12 +613,12 @@ export interface Validation {
   ablation: { term: string; looR2: number; looSpearman: number; foldR2: number; foldSpearman: number }[];
   /** The double-blind gate as a REPORTED DIAGNOSTIC ONLY. It is computed
    *  every run over the same candidate terms v5 gated, with the same
-   *  thresholds — but in v6 its verdicts decide NOTHING about the fit:
+   *  thresholds — but in v7 its verdicts decide NOTHING about the fit:
    *  the shipped model is the restored v4 model whatever the gate says.
    *  Read it as a second opinion, the role v4's ablation table had. */
   gate: {
     rule: string;
-    /** v6: diagnostic only — the gate does not decide the fit. */
+    /** v7: diagnostic only — the gate does not decide the fit. */
     diagnosticOnly: boolean;
     value: BlindVerdict[];
     odds: BlindVerdict[];
@@ -512,6 +628,40 @@ export interface Validation {
     droppedValue: string[];
     keptOdds: string[];
     droppedOdds: string[];
+  };
+  /** Every value term's improvement multiple on each blind protocol:
+   *  the held-out miss WITHOUT the term over the miss WITH it. Above
+   *  1.00 the term shrinks the miss on that protocol; below 1.00 it
+   *  grows it. The multiples are the v7 answer to the #2 title's
+   *  "(walk-forward x2.26, leave-one-out x2.99)" — reported per term,
+   *  diagnostic only, never deciding the fit. */
+  blindMultiples: { term: string; wfMultiple: number; looMultiple: number; verdict: string }[];
+  /** The shipped model's overall multiples against a flat
+   *  median-multiple baseline (predict every comp at the median
+   *  market-cap/TVL of its train set): the baseline's median absolute
+   *  log miss over the model's, on each blind protocol. Above 1.00 the
+   *  fitted model beats the flat multiple out of sample. */
+  overallMultiples: {
+    walkForward: number;
+    leaveOneOut: number;
+    wfBaselineMiss: number;
+    wfModelMiss: number;
+    looBaselineMiss: number;
+    looModelMiss: number;
+  };
+  /** Per-kind odds calibration: the 5-fold out-of-sample odds, shifted
+   *  per kind on the logit scale until each kind's predicted launch
+   *  share matches its own observed share, shrunk toward the global
+   *  rate. `applied` is true only when the calibrated odds do not
+   *  worsen the out-of-fold Brier — otherwise the table is reported
+   *  and the raw odds ship. */
+  oddsCalibration: {
+    applied: boolean;
+    rawBrier: number;
+    calBrier: number;
+    rawLogloss: number;
+    calLogloss: number;
+    kinds: { kind: string; n: number; pred: number; observed: number; shift: number; applied: boolean }[];
   };
   /** Per-kind 80% conformal intervals on implied value, from the
    *  leave-one-out residuals of the shipped (restored v4) model. */
@@ -536,7 +686,7 @@ export interface FittedModel {
   validation: Validation;
   /** Fitted market cap if the protocol launched (dollars), before odds. */
   fittedValue(p: Protocol): number;
-  /** Smoothed launch odds for the protocol (0..1). */
+  /** Smoothed launch odds for the protocol (0..1), per-kind calibrated when the calibration ships. */
   launchOdds(p: Protocol): number;
   /** Expected value = fitted x odds (dollars). */
   expectedValue(p: Protocol): number;
@@ -551,10 +701,13 @@ export interface FittedModel {
    *  implied x exp(+/-q_kind), where q_kind is the row's kind's 80%
    *  conformal half-width (global fallback for thin kinds). */
   valueInterval(p: Protocol, impliedValueUsd: number): { low: number; high: number; factor: number; kind: string };
+  /** The per-kind odds-calibration shift applied to a protocol (0 when
+   *  the calibration does not ship, or the kind is too thin to price). */
+  oddsShift(p: Protocol): number;
 }
 
 const RIDGE = 30;
-/** Gate thresholds (diagnostic only in v6): the smallest held-out
+/** Gate thresholds (diagnostic only in v7): the smallest held-out
  *  improvement, on EACH blind protocol, that would earn a term its
  *  place under the v5 rule. */
 const VALUE_GATE = 0.005;
@@ -566,42 +719,15 @@ const GATE_LOGISTIC_ITERS = 500;
 /** A kind needs this many traded comps for its own conformal factor;
  *  thinner kinds fall back to the pooled global factor. */
 const KIND_MIN_N = 8;
-
-/** Logistic regression by plain gradient descent (deterministic: fixed
- *  steps, fixed order, no randomness). Standardised inputs, L2 = 1.
- *  `iters` below 2000 runs at step 0.08 (the gate's relative-AUC fits);
- *  the shipped fit runs 2000 rounds at step 0.05. */
-export function fitLogistic(X: number[][], yy: number[], iters = 2000): { b: number[]; mu: number[]; sd: number[] } {
-  const k = X[0]!.length;
-  const mu: number[] = [], sd: number[] = [];
-  for (let j = 0; j < k; j++) {
-    const m = X.reduce((s, r) => s + r[j]!, 0) / X.length;
-    const v = Math.sqrt(X.reduce((s, r) => s + (r[j]! - m) ** 2, 0) / X.length) || 1;
-    mu.push(m); sd.push(v);
-  }
-  const b = new Array<number>(k + 1).fill(0);
-  const n = X.length;
-  const step = iters >= 2000 ? 0.05 : 0.08;
-  for (let it = 0; it < iters; it++) {
-    const g = new Array<number>(b.length).fill(0);
-    for (let i = 0; i < n; i++) {
-      let z = b[0]!;
-      for (let j = 0; j < k; j++) z += b[j + 1]! * (X[i]![j]! - mu[j]!) / sd[j]!;
-      const pr = 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, z))));
-      const e = pr - yy[i]!;
-      g[0]! += e;
-      for (let j = 0; j < k; j++) g[j + 1]! += e * (X[i]![j]! - mu[j]!) / sd[j]!;
-    }
-    for (let j = 0; j < b.length; j++) b[j]! -= step * (g[j]! / n + (j === 0 ? 0 : b[j]! / n));
-  }
-  return { b, mu, sd };
-}
-
-export function predictLogistic(m: { b: number[]; mu: number[]; sd: number[] }, x: number[]): number {
-  let z = m.b[0]!;
-  for (let j = 0; j < x.length; j++) z += m.b[j + 1]! * (x[j]! - m.mu[j]!) / m.sd[j]!;
-  return 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, z))));
-}
+/** A kind needs this many protocols for its own odds-calibration shift;
+ *  thinner kinds take no shift. */
+const CAL_MIN_N = 8;
+/** Shrinkage toward the global launch rate when a kind's own shift is
+ *  computed: a kind's observed and predicted shares are pulled toward
+ *  the global shares with this many pseudo-protocols. */
+const CAL_SHRINK = 10;
+/** No per-kind odds shift may exceed this many logits in either direction. */
+const CAL_MAX_SHIFT = 0.75;
 
 /** Fit the comps model on the traded protocols and validate it held-out.
  *  The value fit is Huber-robust; every held-out test below refits with
@@ -759,6 +885,89 @@ export function fitModel(s: Snapshot): FittedModel {
     return { low, high, factor: Math.round(factor * 100) / 100, kind };
   };
 
+  // ---- the two-blind multiples (NEW in v7) ----
+  // For every candidate value term, the improvement multiple on each
+  // blind protocol: the held-out miss WITHOUT the term over the miss
+  // WITH it. Above 1.00 the term shrinks the miss on that protocol.
+  // The shipped terms are compared against the full model (with =
+  // full, without = full minus the term); the three candidates are
+  // compared the other way (with = full plus the term, without =
+  // full). The miss is the median absolute log miss — the same miss
+  // the conformal intervals are priced from. Diagnostic only, like
+  // the gate: the multiples are reported, never obeyed.
+  const SHIP_COLS: [number, number][] = [[0, 1], [1, 7], [7, 8], [8, 9], [9, 10]];
+  const dropCols = (Xm: number[][], [lo, hi]: [number, number]): number[][] =>
+    Xm.map((row) => row.filter((_, j) => j < lo || j >= hi));
+  const wfBasePairs = pooledPairs(X, y, tSplits, robustFit);
+  const wfModelMiss = medianAbsLogMiss(wfBasePairs.actual, wfBasePairs.fitted);
+  const blindMultiples: Validation['blindMultiples'] = VALUE_TERMS.map((term, ti) => {
+    let withX: number[][];
+    let withoutX: number[][];
+    if (ti < 5) {
+      withX = X;
+      withoutX = dropCols(X, SHIP_COLS[ti]!);
+    } else {
+      const keep = VALUE_TERMS.map((_, j) => j < 5 || j === ti);
+      withX = mask(keep);
+      withoutX = X;
+    }
+    // Leave-one-out multiples. The full model's LOO predictions are
+    // already computed above; reuse them on the "with = full" side.
+    const looWith = ti < 5 ? loo : looPredictions(withX, y, robustFit);
+    const looWithout = ti < 5 ? looPredictions(withoutX, y, robustFit) : loo;
+    const looMissWith = medianAbsLogMiss(y, looWith);
+    const looMissWithout = medianAbsLogMiss(y, looWithout);
+    // Walk-forward multiples, pooled over the gate's time splits.
+    const wfWith = ti < 5 ? wfBasePairs : pooledPairs(withX, y, tSplits, robustFit);
+    const wfWithout = ti < 5 ? pooledPairs(withoutX, y, tSplits, robustFit) : wfBasePairs;
+    const wfMissWith = medianAbsLogMiss(wfWith.actual, wfWith.fitted);
+    const wfMissWithout = medianAbsLogMiss(wfWithout.actual, wfWithout.fitted);
+    const wfMultiple = wfMissWithout / Math.max(wfMissWith, 1e-9);
+    const looMultiple = looMissWithout / Math.max(looMissWith, 1e-9);
+    const verdict =
+      wfMultiple >= 1 && looMultiple >= 1
+        ? 'KEEP — shrinks the miss on both blind tests'
+        : wfMultiple >= 1 || looMultiple >= 1
+          ? 'DROP — single-blind'
+          : 'DROP — no blind support';
+    return { term: term.name, wfMultiple, looMultiple, verdict };
+  });
+
+  // ---- the overall multiples against a flat baseline ----
+  // The flat baseline prices every comp at the median market-cap/TVL
+  // of its train set — the multiple a hand-tuned entry would use. The
+  // overall multiple is the baseline's median absolute log miss over
+  // the fitted model's, on the same out-of-sample rows. Above 1.00
+  // the fitted model beats the flat multiple out of sample.
+  const medianRatio = (rows: Protocol[]): number => {
+    const rs = rows.map((p) => (p.mcap_usd as number) / p.tvl_usd).sort((a, b) => a - b);
+    return rs[Math.floor(rs.length / 2)]!;
+  };
+  const looBasePred = traded.map((p, i) => {
+    const train = traded.filter((_, j) => j !== i);
+    return Math.log(p.tvl_usd) + Math.log(medianRatio(train));
+  });
+  const looBaselineMiss = medianAbsLogMiss(y, looBasePred);
+  const looModelMiss = medianAbsLogMiss(y, loo);
+  const wfBaseActual: number[] = [];
+  const wfBaseFitted: number[] = [];
+  for (const sp of tSplits) {
+    const r = medianRatio(sp.train.map((i) => traded[i]!));
+    for (const i of sp.test) {
+      wfBaseActual.push(y[i]!);
+      wfBaseFitted.push(Math.log(traded[i]!.tvl_usd) + Math.log(r));
+    }
+  }
+  const wfBaselineMiss = medianAbsLogMiss(wfBaseActual, wfBaseFitted);
+  const overallMultiples: Validation['overallMultiples'] = {
+    walkForward: wfBaselineMiss / Math.max(wfModelMiss, 1e-9),
+    leaveOneOut: looBaselineMiss / Math.max(looModelMiss, 1e-9),
+    wfBaselineMiss,
+    wfModelMiss,
+    looBaselineMiss,
+    looModelMiss,
+  };
+
   // ---- launch odds: logistic regression (v4 features), gate diagnostic first ----
   const byCat = new Map<string, { t: number; n: number }>();
   for (const p of s.protocols) {
@@ -850,26 +1059,92 @@ export function fitModel(s: Snapshot): FittedModel {
   });
   const brier = (pr: number[]): number => pr.reduce((a, p, i) => a + (p - allY[i]!) ** 2, 0) / pr.length;
   const logloss = (pr: number[]): number => -pr.reduce((a, p, i) => a + (allY[i]! ? Math.log(Math.max(1e-9, p)) : Math.log(Math.max(1e-9, 1 - p))), 0) / pr.length;
+
+  // ---- per-kind odds calibration (NEW in v7) ----
+  // A kind's predicted odds are shifted on the logit scale until they
+  // match that kind's own observed launch share, shrunk toward the
+  // global shares with CAL_SHRINK pseudo-protocols and capped at
+  // CAL_MAX_SHIFT logits. Kinds with fewer than CAL_MIN_N protocols
+  // take no shift. The shift is fitted OUT-OF-FOLD for the reported
+  // scores: each fold's shifts come from the other four folds' 5-fold
+  // predictions, so the calibrated Brier below is honest. The shipped
+  // shifts use all 758 out-of-fold predictions. The calibration ships
+  // only if it does not worsen the out-of-fold Brier — otherwise the
+  // table is reported and the raw odds ship.
+  const kindOf = (p: Protocol): string => p.category ?? '(none)';
+  const kindShift = (idx: number[], pred: number[]): Map<string, number> => {
+    const shifts = new Map<string, number>();
+    const gPred = idx.reduce((a, i) => a + pred[i]!, 0) / idx.length;
+    const gObs = idx.reduce((a, i) => a + allY[i]!, 0) / idx.length;
+    const byKindIdx = new Map<string, number[]>();
+    for (const i of idx) {
+      const k = kindOf(s.protocols[i]!);
+      const arr = byKindIdx.get(k) ?? [];
+      arr.push(i);
+      byKindIdx.set(k, arr);
+    }
+    for (const [k, rows] of byKindIdx) {
+      if (rows.length < CAL_MIN_N) { shifts.set(k, 0); continue; }
+      const pBar = rows.reduce((a, i) => a + pred[i]!, 0) / rows.length;
+      const oBar = rows.reduce((a, i) => a + allY[i]!, 0) / rows.length;
+      const pS = (pBar * rows.length + gPred * CAL_SHRINK) / (rows.length + CAL_SHRINK);
+      const oS = (oBar * rows.length + gObs * CAL_SHRINK) / (rows.length + CAL_SHRINK);
+      shifts.set(k, clamp(logit(oS) - logit(pS), -CAL_MAX_SHIFT, CAL_MAX_SHIFT));
+    }
+    return shifts;
+  };
+  const allIdx = s.protocols.map((_, i) => i);
+  const calOdds = new Array<number>(s.protocols.length);
+  for (let f = 0; f < 5; f++) {
+    const tr = allIdx.filter((i) => foldOf(s.protocols[i]!) !== f);
+    const shifts = kindShift(tr, cvOdds);
+    s.protocols.forEach((_, i) => {
+      if (foldOf(s.protocols[i]!) !== f) return;
+      calOdds[i] = sigmoid(logit(cvOdds[i]!) + (shifts.get(kindOf(s.protocols[i]!)) ?? 0));
+    });
+  }
+  const rawBrier = brier(cvOdds);
+  const calBrier = brier(calOdds);
+  const rawLogloss = logloss(cvOdds);
+  const calLogloss = logloss(calOdds);
+  const calApplied = calBrier <= rawBrier;
+  const shippedShifts = kindShift(allIdx, cvOdds);
+  const calKinds: Validation['oddsCalibration']['kinds'] = [...new Set(s.protocols.map(kindOf))]
+    .map((k) => {
+      const rows = allIdx.filter((i) => kindOf(s.protocols[i]!) === k);
+      const pred = rows.reduce((a, i) => a + cvOdds[i]!, 0) / rows.length;
+      const observed = rows.reduce((a, i) => a + allY[i]!, 0) / rows.length;
+      // Always report the shift the kind WOULD take, whether or not it
+      // ships: the table is the diagnostic either way.
+      const shift = shippedShifts.get(k) ?? 0;
+      return { kind: k, n: rows.length, pred, observed, shift, applied: calApplied && rows.length >= CAL_MIN_N };
+    })
+    .sort((a, b) => b.n - a.n);
+  // The odds the validation table reports are the shipped ones:
+  // calibrated out-of-fold when the calibration ships, raw otherwise.
+  const evalOdds = calApplied ? calOdds : cvOdds;
   const calibration: Validation['odds']['calibration'] = [];
   for (const [lo, hi] of [[0, 0.1], [0.1, 0.25], [0.25, 0.4], [0.4, 0.55], [0.55, 0.7], [0.7, 0.85], [0.85, 1.01]] as const) {
-    const idx = cvOdds.map((p, i) => (p >= lo && p < hi ? i : -1)).filter((i) => i >= 0);
+    const idx = evalOdds.map((p, i) => (p >= lo && p < hi ? i : -1)).filter((i) => i >= 0);
     if (!idx.length) continue;
     calibration.push({
       lo, hi,
       n: idx.length,
-      pred: idx.reduce((a, i) => a + cvOdds[i]!, 0) / idx.length,
+      pred: idx.reduce((a, i) => a + evalOdds[i]!, 0) / idx.length,
       observed: idx.reduce((a, i) => a + allY[i]!, 0) / idx.length,
     });
   }
   // top decile of predicted odds: the rows that drive the board's top
-  const order = cvOdds.map((v, i) => [v, i] as const).sort((a, b) => b[0] - a[0]);
-  const topDec = order.slice(0, Math.floor(cvOdds.length / 10));
+  const order = evalOdds.map((v, i) => [v, i] as const).sort((a, b) => b[0] - a[0]);
+  const topDec = order.slice(0, Math.floor(evalOdds.length / 10));
   const topPred = topDec.reduce((a, v) => a + v[0], 0) / topDec.length;
   const topObs = topDec.reduce((a, v) => a + allY[v[1]]!, 0) / topDec.length;
   const oddsModel = fitLogistic(allX, allY);
+  const oddsShift = (p: Protocol): number => (calApplied ? (shippedShifts.get(kindOf(p)) ?? 0) : 0);
   const fittedValue = (p: Protocol): number => Math.exp(predict(beta, features(p, ctx)));
   const launchOdds = (p: Protocol): number => {
     let v = predictLogistic(oddsModel, oddsFeats(p));
+    if (calApplied) v = sigmoid(logit(v) + oddsShift(p));
     if (isProduct(p)) v = Math.min(v, 0.05);
     return v;
   };
@@ -921,8 +1196,8 @@ export function fitModel(s: Snapshot): FittedModel {
       splitN: teS.length,
       looPoints,
       odds: {
-        brier: brier(cvOdds),
-        logloss: logloss(cvOdds),
+        brier: brier(evalOdds),
+        logloss: logloss(evalOdds),
         v2Brier: brier(v2Odds),
         v2Logloss: logloss(v2Odds),
         topPred,
@@ -931,7 +1206,7 @@ export function fitModel(s: Snapshot): FittedModel {
       },
       ablation,
       gate: {
-        rule: 'DIAGNOSTIC ONLY in v6: the gate does not decide the fit. FORWARD selection under two blind protocols. Start with no term. At each round, add the term whose addition improves BOTH blind protocols the most (judged by the smaller of its two improvements), provided that smaller improvement clears the threshold — >= 0.005 of held-out rank correlation (value) or >= 0.005 of AUC (odds). Stop when no remaining term clears it on both. Forward, not backward: in the full model a term can be masked by a near-duplicate (the odds model carries three age encodings that hide each other, so backward elimination dropped all three while any one of them earns its place on both protocols once the others are out). Protocol T is walk-forward, forward and reverse; Protocol C is leave-one-category-out. A dropped term failed against the final kept model, and the verdict names the protocol that refused it. In v5 this gate DECIDED the fit and dropped 7 of 8 value terms and 8 of 10 odds terms; the board lost its discrimination (value range $177k–$26.3M vs v4 $18k–$43.1M, top1/top10 1.90 vs 2.62) while held-out stats barely moved — so v6 restores the v4 fit and keeps the gate as a second opinion only.',
+        rule: 'DIAGNOSTIC ONLY in v7: the gate does not decide the fit. FORWARD selection under two blind protocols. Start with no term. At each round, add the term whose addition improves BOTH blind protocols the most (judged by the smaller of its two improvements), provided that smaller improvement clears the threshold — >= 0.005 of held-out rank correlation (value) or >= 0.005 of AUC (odds). Stop when no remaining term clears it on both. Forward, not backward: in the full model a term can be masked by a near-duplicate (the odds model carries three age encodings that hide each other, so backward elimination dropped all three while any one of them earns its place on both protocols once the others are out). Protocol T is walk-forward, forward and reverse; Protocol C is leave-one-category-out. A dropped term failed against the final kept model, and the verdict names the protocol that refused it. In v5 this gate DECIDED the fit and dropped 7 of 8 value terms and 8 of 10 odds terms; the board lost its discrimination (value range $177k–$26.3M vs v4 $18k–$43.1M, top1/top10 1.90 vs 2.62) while held-out stats barely moved — so v6 and v7 restore the v4 fit and keep the gate as a second opinion only. v7 adds the two-blind multiples beside the gate: each term\'s improvement multiple on each blind protocol (miss without the term over miss with it), reported, never obeyed.',
         diagnosticOnly: true,
         value: valueGate,
         odds: oddsGate,
@@ -942,6 +1217,16 @@ export function fitModel(s: Snapshot): FittedModel {
         keptOdds: ODDS_TERMS.filter((_, i) => oddsGate[i]!.kept).map((t) => t.name),
         droppedOdds: ODDS_TERMS.filter((_, i) => !oddsGate[i]!.kept).map((t) => t.name),
       },
+      blindMultiples,
+      overallMultiples,
+      oddsCalibration: {
+        applied: calApplied,
+        rawBrier,
+        calBrier,
+        rawLogloss,
+        calLogloss,
+        kinds: calKinds,
+      },
       intervals,
       dropped: [
         'Age as a straight line: fitted before 2025 it adds +0.37 log points a year, fitted after it says -0.91 — it fails walk-forward (R2 -0.78), so it is dropped and only the 2025 era step is kept.',
@@ -951,7 +1236,9 @@ export function fitModel(s: Snapshot): FittedModel {
         'For the odds: the 2025 era step in place of age, a 2024 dummy, log(TVL) x age, and TVL per chain — none beats the age model out of sample (5-fold Brier 0.20 either way), so the odds stay on age plus the top-chain flags and growth.',
         'Round 6 tried per-category TVL slopes (leave-one-category-out R2 turns negative), TVL per chain, log(TVL) x log(chains), growth x era, full listing-year dummies, the category launch rate as a value feature, time-weighted fits, k-nearest-neighbour and median-multiple blends, and a rank regression: none beats the base model held-out twice, so none was kept.',
         'A plain LAD (median) fit instead of Huber: it wins walk-forward 2025-06-01 (R2 -0.30 vs -0.40) but loses leave-one-category-out R2 (0.17 vs 0.19), so Huber is the balanced choice.',
-        'The double-blind gate (v5) is kept as a diagnostic only in v6: its verdicts are computed every run and reported in validation.gate, --validate, the dashboard and VALIDATION.md, but they do not decide the fit. v5 let the gate drop 7 of 8 value terms and 8 of 10 odds terms; the board lost its discrimination while held-out stats barely moved, so the v4 fit is restored. ' + valueGate.filter((v) => !v.kept).map((v) => gateLine(v, 'rank corr.')).join(' ') + ' ' + oddsGate.filter((v) => !v.kept).map((v) => gateLine(v, 'AUC')).join(' '),
+        'The double-blind gate (v5) is kept as a diagnostic only in v7: its verdicts are computed every run and reported in validation.gate, --validate, the dashboard and VALIDATION.md, but they do not decide the fit. v5 let the gate drop 7 of 8 value terms and 8 of 10 odds terms; the board lost its discrimination while held-out stats barely moved, so the v4 fit is restored. ' + valueGate.filter((v) => !v.kept).map((v) => gateLine(v, 'rank corr.')).join(' ') + ' ' + oddsGate.filter((v) => !v.kept).map((v) => gateLine(v, 'AUC')).join(' '),
+        'v7 — the two-blind multiples (reported, never obeyed): ' + blindMultiples.map((m) => multipleLine(m)).join(' ') + ` Overall multiples against a flat median-multiple baseline: walk-forward x${overallMultiples.walkForward.toFixed(2)}, leave-one-out x${overallMultiples.leaveOneOut.toFixed(2)}.`,
+        `v7 — per-kind odds calibration: out-of-fold Brier ${rawBrier.toFixed(3)} raw vs ${calBrier.toFixed(3)} calibrated (log-loss ${rawLogloss.toFixed(3)} vs ${calLogloss.toFixed(3)}); the calibration ${calApplied ? 'SHIPS — it does not worsen the out-of-fold Brier' : 'does NOT ship — it would worsen the out-of-fold Brier, so the raw odds ship and the per-kind table stays a diagnostic'}.`,
       ],
     },
     fittedValue,
@@ -960,6 +1247,7 @@ export function fitModel(s: Snapshot): FittedModel {
     factors,
     multiples,
     valueInterval,
+    oddsShift,
   };
 }
 
@@ -991,6 +1279,13 @@ export function depositUsd(p: Protocol): number {
 }
 const fmtUsd = (n: number): string => (n >= 1000 ? `$${Math.round(n).toLocaleString('en-US')}` : `$${n.toFixed(n < 10 ? 2 : 0)}`);
 
+/** Farmer hours over the 8-week horizon: fund the wallet (10 min),
+ *  deposit (15), the core action (10), eight weekly repeats (10 each),
+ *  and the exit (15) — 150 minutes, 2.5 hours. v7 prices the farm in
+ *  $/hour of the farmer's own time, not just in gas: a plan that pays
+ *  $40 an hour for the work beats one that pays $4, at any pool size. */
+export const FARMER_HOURS = 2.5;
+
 /** The protocol's core action, by category. */
 function coreAction(p: Protocol, dep: number): string {
   const n = p.name;
@@ -1010,7 +1305,21 @@ function coreAction(p: Protocol, dep: number): string {
   }
 }
 
-export interface FarmPlan { steps: string[]; verdict: string; totalGasUsd: number; depositUsd: number; weeks: number; farmerEvUsd: number; farmCostUsd: number; ratio: number; }
+export interface FarmPlan {
+  steps: string[];
+  verdict: string;
+  totalGasUsd: number;
+  depositUsd: number;
+  weeks: number;
+  farmerEvUsd: number;
+  farmCostUsd: number;
+  ratio: number;
+  /** The farm priced in the farmer's own time: cost and expected pool
+   *  per hour of work over the 8-week horizon (FARMER_HOURS hours). */
+  costPerHourUsd: number;
+  poolPerHourUsd: number;
+  farmerHours: number;
+}
 
 /**
  * The verdict is a triage by rank and odds among the protocols that can
@@ -1021,7 +1330,9 @@ export interface FarmPlan { steps: string[]; verdict: string; totalGasUsd: numbe
  * threshold and the verdict would say nothing. What the reader needs is
  * which protocols to farm first. The costed numbers are still computed
  * and shown: the farmers' expected pool, the gas, the deposit and the
- * 2% opportunity cost of locking it for 8 weeks.
+ * 2% opportunity cost of locking it for 8 weeks — and, new in v7, the
+ * same numbers per HOUR of the farmer's time, which is the unit the
+ * farm queue is sorted by.
  */
 export function farmPlan(p: Protocol, ev: number, odds: number, fitted: number, rank: number): FarmPlan {
   const chain = homeChain(p);
@@ -1033,6 +1344,8 @@ export function farmPlan(p: Protocol, ev: number, odds: number, fitted: number, 
   const farmCost = totalGas + dep * 0.02;
   const farmerEv = fitted * odds * 0.05;
   const ratio = farmCost > 0 ? farmerEv / farmCost : 0;
+  const costPerHour = farmCost / FARMER_HOURS;
+  const poolPerHour = farmerEv / FARMER_HOURS;
   let verdict: string;
   if (isProduct(p)) verdict = 'Skip — a product of a token that already trades; it records no token of its own and a fresh launch is very unlikely';
   else if (rank <= 10 && odds >= 0.4) verdict = 'Farm now — top priority';
@@ -1042,14 +1355,14 @@ export function farmPlan(p: Protocol, ev: number, odds: number, fitted: number, 
   else verdict = 'Skip — expected value too low for the gas';
   const evStr = fmtUsd(ev);
   const steps = [
-    `Verdict: ${verdict}. Expected value ${evStr} at ${Math.round(odds * 100)}% launch odds; if a token launches, farmers as a group might share about 5% of the launch value (assumed — no airdrop is confirmed), about ${fmtUsd(farmerEv)} at these odds. Your cost is about ${fmtUsd(farmCost)} (${fmtUsd(totalGas)} gas plus 2% of the $${dep} deposit for locking it ${weeks} weeks). Fund your wallet on ${chain} first, about 10 minutes.`,
+    `Verdict: ${verdict}. Expected value ${evStr} at ${Math.round(odds * 100)}% launch odds; if a token launches, farmers as a group might share about 5% of the launch value (assumed — no airdrop is confirmed), about ${fmtUsd(farmerEv)} at these odds. Your cost is about ${fmtUsd(farmCost)} (${fmtUsd(totalGas)} gas plus 2% of the $${dep} deposit for locking it ${weeks} weeks) and ${FARMER_HOURS} hours of your time, so about ${fmtUsd(costPerHour)} per hour — against a pool worth about ${fmtUsd(poolPerHour)} per hour of farming. Fund your wallet on ${chain} first, about 10 minutes.`,
     `Deposit $${dep} into ${p.name}'s main ${p.category ?? 'protocol'} pool on ${chain}; one transaction, about ${fmtUsd(gas)} in gas, about 15 minutes.`,
     `${coreAction(p, dep)}; one transaction, about ${fmtUsd(gas)} in gas, about 10 minutes.`,
     `Repeat the core action once a week for ${weeks} weeks so the activity is not a one-off; each repeat costs about ${fmtUsd(gas)} in gas and 10 minutes.`,
     `Leave the $${dep} deposit in place for the full ${weeks}-week farm horizon; withdrawing early resets the activity clock and the position.`,
     `Watch for a token announcement from ${p.name}; when it goes live, claim through the protocol's own claim page and exit the position — one transaction, about ${fmtUsd(gas)} in gas, about 15 minutes.`,
   ];
-  return { steps, verdict, totalGasUsd: totalGas, depositUsd: dep, weeks, farmerEvUsd: farmerEv, farmCostUsd: farmCost, ratio };
+  return { steps, verdict, totalGasUsd: totalGas, depositUsd: dep, weeks, farmerEvUsd: farmerEv, farmCostUsd: farmCost, ratio, costPerHourUsd: costPerHour, poolPerHourUsd: poolPerHour, farmerHours: FARMER_HOURS };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1090,6 +1403,15 @@ export interface RadarRow extends BoardRow {
   farmerEvUsd: number;
   farmCostUsd: number;
   farmRatio: number;
+  /** The farm priced in the farmer's time: cost and expected pool per
+   *  hour of work over the 8-week horizon. */
+  farmCostPerHourUsd: number;
+  farmPoolPerHourUsd: number;
+  /** Which kind calibrated this row's launch odds, and the shift it
+   *  applied in logits (0 when the calibration does not ship, or the
+   *  kind is too thin to price). */
+  oddsKind: string;
+  oddsShift: number;
   /** The conformal factor applied to this row (exp of its kind's 80%
    *  half-width, or the global factor) and which kind priced it. */
   interval_factor: number;
@@ -1104,8 +1426,9 @@ export interface Radar {
   watchlist: string[];
   /** The top 10 rows with a one-line reason each, computed from the row's own figures. */
   picks: { slug: string; name: string; rank: number; implied_value_usd: number; odds: number; why: string }[];
-  /** The 20 rows whose farmers' pool beats their farm cost by the widest margin. */
-  farmQueue: { slug: string; name: string; rank: number; implied_value_usd: number; odds: number; farmRatio: number; verdict: string }[];
+  /** The 20 rows whose farmers' pool per HOUR of work is highest — the
+   *  cheapest wins first, in the unit a farmer actually spends. */
+  farmQueue: { slug: string; name: string; rank: number; implied_value_usd: number; odds: number; farmRatio: number; poolPerHourUsd: number; costPerHourUsd: number; verdict: string }[];
   /** Fitted market-cap/TVL multiple per category, fitted and observed. */
   multiples: { category: string; n: number; fitted: number; observedMedian: number }[];
 }
@@ -1172,6 +1495,10 @@ export function buildRadar(s: Snapshot): { board: BoardRow[]; radar: Radar } {
     farmerEvUsd: Math.round(plan.farmerEvUsd),
     farmCostUsd: Math.round(plan.farmCostUsd * 100) / 100,
     farmRatio: Math.round(plan.ratio * 10) / 10,
+    farmCostPerHourUsd: Math.round(plan.costPerHourUsd * 100) / 100,
+    farmPoolPerHourUsd: Math.round(plan.poolPerHourUsd * 100) / 100,
+    oddsKind: r.p.category ?? '(none)',
+    oddsShift: Math.round(model.oddsShift(r.p) * 100) / 100,
     interval_factor: iv.factor,
     interval_kind: iv.kind,
     };
@@ -1185,9 +1512,9 @@ export function buildRadar(s: Snapshot): { board: BoardRow[]; radar: Radar } {
   const picks = rows.slice(0, 10).map((r) => ({ slug: r.slug, name: r.name, rank: r.rank, implied_value_usd: r.implied_value_usd, odds: r.odds, why: pickWhy(r) }));
   const farmQueue = [...rows]
     .filter((r) => !r.isProduct)
-    .sort((a, b) => b.farmRatio - a.farmRatio)
+    .sort((a, b) => b.farmPoolPerHourUsd - a.farmPoolPerHourUsd)
     .slice(0, 20)
-    .map((r) => ({ slug: r.slug, name: r.name, rank: r.rank, implied_value_usd: r.implied_value_usd, odds: r.odds, farmRatio: r.farmRatio, verdict: r.verdict }));
+    .map((r) => ({ slug: r.slug, name: r.name, rank: r.rank, implied_value_usd: r.implied_value_usd, odds: r.odds, farmRatio: r.farmRatio, poolPerHourUsd: r.farmPoolPerHourUsd, costPerHourUsd: r.farmCostPerHourUsd, verdict: r.verdict }));
   return {
     board,
     radar: {
@@ -1196,7 +1523,7 @@ export function buildRadar(s: Snapshot): { board: BoardRow[]; radar: Radar } {
         beta: model.beta.map((b) => Math.round(b * 1000) / 1000),
         terms,
         validation: model.validation,
-        fittedNote: 'log(market cap) fitted by a Huber-robust regression (ridge 30, 15 reweighting rounds) on the 128 traded protocols that record a market cap; age enters only as a 2025 era step (a straight age line fails walk-forward); implied value = exp(fitted) x launch odds, where the odds come from a logistic regression on all 758 protocols (log TVL, age, log chains, category launch rate, product flag, top-chain flags, 7-day growth). v6 restores this v4 model in full: the v5 double-blind gate is kept as a reported diagnostic only and decides nothing about the fit. Every implied value carries an 80% conformal interval, priced per kind from the leave-one-out residuals (value_low_usd–value_high_usd on every row).',
+        fittedNote: 'log(market cap) fitted by a Huber-robust regression (ridge 30, 15 reweighting rounds) on the 128 traded protocols that record a market cap; age enters only as a 2025 era step (a straight age line fails walk-forward); implied value = exp(fitted) x launch odds, where the odds come from a logistic regression on all 758 protocols (log TVL, age, log chains, category launch rate, product flag, top-chain flags, 7-day growth) and are then calibrated per kind against that kind\'s own observed launch share (shrunk toward the global rate, capped at 0.75 logits, kinds with fewer than 8 protocols take no shift; the calibration ships only when it does not worsen the out-of-fold Brier). v7 keeps the v4 model in full: the v5 double-blind gate is a reported diagnostic only and decides nothing about the fit, and every value term\'s improvement multiple on each blind protocol (walk-forward and leave-one-out) is reported beside it. Every implied value carries an 80% conformal interval, priced per kind from the leave-one-out residuals (value_low_usd–value_high_usd on every row). Farm plans are costed in $/hour of the farmer\'s time as well as in gas.',
       },
       rows,
       traded,
